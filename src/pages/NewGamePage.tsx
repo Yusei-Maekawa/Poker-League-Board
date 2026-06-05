@@ -1,26 +1,37 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { Layout, PageHeader } from '../components/Layout'
+import { StickyFeedback } from '../components/StickyFeedback'
 import { Loading } from '../components/Loading'
 import { usePlayers, useActivePlayers } from '../hooks/usePlayers'
 import { useGames } from '../hooks/useGames'
 import { useAuth } from '../hooks/useAuth'
+import { useSeasons } from '../hooks/useSeasons'
 import { calculatePoint } from '../utils/point'
+import { getPointRulesForSeason } from '../utils/seasonPointRules'
 import { LimitedTextField } from '../components/LimitedTextField'
 import { validateGameForm, parseRankInput } from '../utils/validateGame'
 import { GAME_LIMITS } from '../utils/validationLimits'
 import { getFirebaseErrorMessage } from '../utils/firebaseError'
+import { getLocalDateString } from '../utils/formatDateTime'
+import { CPU_PARTICIPANTS } from '../constants/cpuPlayers'
+import { resolveParticipant } from '../utils/gameParticipant'
 
 export function NewGamePage() {
   const navigate = useNavigate()
   const { isAdmin, loading: authLoading } = useAuth()
   const { players, loading: playersLoading } = usePlayers()
   const { addGameWithResults } = useGames()
+  const { seasons, activeSeasonId } = useSeasons()
+
+  const pointRules = useMemo(() => {
+    const season = seasons.find((s) => s.id === activeSeasonId)
+    return getPointRulesForSeason(season)
+  }, [seasons, activeSeasonId])
 
   const activePlayers = useActivePlayers(players).filter((p) => p.authUid)
 
-  const today = new Date().toISOString().slice(0, 10)
-  const [date, setDate] = useState(today)
+  const [date, setDate] = useState(getLocalDateString)
   const [appName, setAppName] = useState('PokerStars')
   const [memo, setMemo] = useState('')
   const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>([])
@@ -85,7 +96,7 @@ export function NewGamePage() {
       const n = selectedPlayerIds.length
       const entries = selectedPlayerIds.map((playerId) => {
         const rank = rankMap[playerId]
-        const point = calculatePoint(rank, n)
+        const point = calculatePoint(rank, n, pointRules)
         return { playerId, rank, point }
       })
 
@@ -194,6 +205,30 @@ export function NewGamePage() {
               })}
             </div>
           )}
+
+          <div className="mt-4 pt-4 border-t border-white/[0.08]">
+            <p className="text-white/50 text-xs mb-2">CPU 相手（アプリ内の仮想参加者）</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {CPU_PARTICIPANTS.map((cpu) => {
+                const selected = selectedPlayerIds.includes(cpu.id)
+                return (
+                  <button
+                    key={cpu.id}
+                    type="button"
+                    onClick={() => togglePlayer(cpu.id)}
+                    className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-left transition-all duration-150 ${
+                      selected
+                        ? 'bg-violet-500/15 border-violet-500/40 text-white'
+                        : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/[0.08]'
+                    }`}
+                  >
+                    <span className="text-base">{cpu.icon}</span>
+                    <span className="text-sm font-medium">{cpu.name}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
         </div>
 
         {/* 順位入力 */}
@@ -206,18 +241,18 @@ export function NewGamePage() {
 
             <div className="space-y-2">
               {selectedPlayerIds.map((pid) => {
-                const player = activePlayers.find((p) => p.id === pid)
-                if (!player) return null
+                const participant = resolveParticipant(pid, players)
+                if (!participant) return null
                 const rank = rankMap[pid] ?? ''
-                const point = rank ? calculatePoint(Number(rank), n) : null
+                const point = rank ? calculatePoint(Number(rank), n, pointRules) : null
 
                 return (
                   <div key={pid} className="flex items-center gap-3 bg-white/4 rounded-lg px-3 py-2.5">
                     <span className="text-base flex-shrink-0">
-                      {player.icon || player.name.slice(0, 2)}
+                      {participant.icon}
                     </span>
                     <span className="flex-1 text-white text-sm font-medium truncate">
-                      {player.name}
+                      {participant.name}
                     </span>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       {point !== null && (
@@ -249,15 +284,15 @@ export function NewGamePage() {
                   {[...selectedPlayerIds]
                     .sort((a, b) => (rankMap[a] ?? 99) - (rankMap[b] ?? 99))
                     .map((pid) => {
-                      const player = activePlayers.find((p) => p.id === pid)
+                      const participant = resolveParticipant(pid, players)
                       const rank = rankMap[pid]
-                      const point = calculatePoint(rank, n)
+                      const point = calculatePoint(rank, n, pointRules)
                       const emoji: Record<number, string> = { 1: '🥇', 2: '🥈', 3: '🥉' }
                       return (
                         <div key={pid} className="flex items-center gap-2 text-sm">
                           <span className="w-6 text-center">{emoji[rank] ?? `${rank}位`}</span>
                           {!emoji[rank] && <span className="w-6 text-center text-white/50 text-xs">{rank}位</span>}
-                          <span className="flex-1 text-white/80">{player?.name}</span>
+                          <span className="flex-1 text-white/80">{participant?.name}</span>
                           <span className={`font-mono text-xs ${point >= 0 ? 'text-gold-400' : 'text-red-400'}`}>
                             {point >= 0 ? `+${point}` : point}pt
                           </span>
@@ -270,13 +305,6 @@ export function NewGamePage() {
           </div>
         )}
 
-        {/* エラー */}
-        {error && (
-          <div className="bg-red-900/30 border border-red-800/40 rounded-lg px-4 py-3">
-            <p className="text-red-300 text-sm">{error}</p>
-          </div>
-        )}
-
         {/* 保存ボタン */}
         <button
           onClick={handleSubmit}
@@ -286,6 +314,12 @@ export function NewGamePage() {
           {submitting ? '保存中...' : '試合結果を保存'}
         </button>
       </div>
+
+      <StickyFeedback
+        error={error}
+        onDismissError={() => setError('')}
+        errorAutoDismissMs={0}
+      />
     </Layout>
   )
 }

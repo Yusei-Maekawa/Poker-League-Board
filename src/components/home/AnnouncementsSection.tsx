@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { AnnouncementCategoryBadge } from '../AnnouncementCategoryBadge'
 import type { Announcement } from '../../types'
 import { formatTimestamp } from '../../utils/formatDateTime'
 
@@ -85,6 +86,9 @@ function AnnouncementContent({
 }) {
   return (
     <>
+      <div className="flex flex-wrap items-center gap-1.5 mb-1">
+        <AnnouncementCategoryBadge category={item.category} />
+      </div>
       <h3
         className={`text-white font-semibold text-sm ${
           canExpand ? 'group-hover:text-gold-200/95 transition-colors' : ''

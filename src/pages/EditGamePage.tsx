@@ -1,16 +1,22 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { Layout, PageHeader } from '../components/Layout'
+import { StickyFeedback } from '../components/StickyFeedback'
 import { Loading } from '../components/Loading'
 import { usePlayers } from '../hooks/usePlayers'
 import { useGames } from '../hooks/useGames'
 import { useGameResults } from '../hooks/useResults'
 import { useAuth } from '../hooks/useAuth'
+import { DEFAULT_SEASON_ID } from '../constants/seasons'
+import { useSeasons } from '../hooks/useSeasons'
 import { calculatePoint } from '../utils/point'
+import { getPointRulesForSeason } from '../utils/seasonPointRules'
 import { LimitedTextField } from '../components/LimitedTextField'
 import { validateGameForm, parseRankInput } from '../utils/validateGame'
 import { GAME_LIMITS } from '../utils/validationLimits'
 import { getFirebaseErrorMessage } from '../utils/firebaseError'
+import { CPU_PARTICIPANTS } from '../constants/cpuPlayers'
+import { resolveParticipant } from '../utils/gameParticipant'
 
 export function EditGamePage() {
   const { gameId } = useParams<{ gameId: string }>()
@@ -21,6 +27,12 @@ export function EditGamePage() {
   const { results, loading: resultsLoading } = useGameResults(gameId ?? '')
 
   const game = games.find((g) => g.id === gameId)
+  const { seasons } = useSeasons()
+
+  const pointRules = useMemo(() => {
+    const seasonId = game?.seasonId ?? DEFAULT_SEASON_ID
+    return getPointRulesForSeason(seasons.find((s) => s.id === seasonId))
+  }, [game?.seasonId, seasons])
 
   const [date, setDate] = useState('')
   const [appName, setAppName] = useState('')
@@ -126,7 +138,7 @@ export function EditGamePage() {
       const n = selectedPlayerIds.length
       const entries = selectedPlayerIds.map((playerId) => {
         const rank = rankMap[playerId]
-        const point = calculatePoint(rank, n)
+        const point = calculatePoint(rank, n, pointRules)
         return { playerId, rank, point }
       })
 
@@ -220,6 +232,30 @@ export function EditGamePage() {
               )
             })}
           </div>
+
+          <div className="mt-4 pt-4 border-t border-white/[0.08]">
+            <p className="text-white/50 text-xs mb-2">CPU 相手（アプリ内の仮想参加者）</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {CPU_PARTICIPANTS.map((cpu) => {
+                const selected = selectedPlayerIds.includes(cpu.id)
+                return (
+                  <button
+                    key={cpu.id}
+                    type="button"
+                    onClick={() => togglePlayer(cpu.id)}
+                    className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-left transition-all duration-150 ${
+                      selected
+                        ? 'bg-violet-500/15 border-violet-500/40 text-white'
+                        : 'bg-white/5 border-white/10 text-white/60 hover:bg-white/[0.08]'
+                    }`}
+                  >
+                    <span className="text-base">{cpu.icon}</span>
+                    <span className="text-sm font-medium">{cpu.name}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
         </div>
 
         {selectedPlayerIds.length >= 2 && (
@@ -231,18 +267,18 @@ export function EditGamePage() {
 
             <div className="space-y-2">
               {selectedPlayerIds.map((pid) => {
-                const player = selectablePlayers.find((p) => p.id === pid)
-                if (!player) return null
+                const participant = resolveParticipant(pid, players)
+                if (!participant) return null
                 const rank = rankMap[pid] ?? ''
-                const point = rank ? calculatePoint(Number(rank), n) : null
+                const point = rank ? calculatePoint(Number(rank), n, pointRules) : null
 
                 return (
                   <div key={pid} className="flex items-center gap-3 bg-white/4 rounded-lg px-3 py-2.5">
                     <span className="text-base flex-shrink-0">
-                      {player.icon || player.name.slice(0, 2)}
+                      {participant.icon}
                     </span>
                     <span className="flex-1 text-white text-sm font-medium truncate">
-                      {player.name}
+                      {participant.name}
                     </span>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       {point !== null && (
@@ -271,12 +307,6 @@ export function EditGamePage() {
           </div>
         )}
 
-        {error && (
-          <div className="bg-red-900/30 border border-red-800/40 rounded-lg px-4 py-3">
-            <p className="text-red-300 text-sm">{error}</p>
-          </div>
-        )}
-
         <button
           onClick={handleSubmit}
           disabled={submitting}
@@ -285,6 +315,12 @@ export function EditGamePage() {
           {submitting ? '更新中...' : '変更を保存'}
         </button>
       </div>
+
+      <StickyFeedback
+        error={error}
+        onDismissError={() => setError('')}
+        errorAutoDismissMs={0}
+      />
     </Layout>
   )
 }

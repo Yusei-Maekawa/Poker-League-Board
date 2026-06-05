@@ -1,5 +1,10 @@
+import {
+  ALL_SEASONS_SCOPE,
+  type SeasonScope,
+} from '../constants/seasons'
 import type { Game, Result, RankingStat } from '../types'
 import { buildRankingStats } from './ranking'
+import { filterResultsBySeason } from './season'
 
 export interface PlayerRecentGame {
   game: Game
@@ -11,12 +16,26 @@ export interface PodiumStreakInfo {
   current: number
 }
 
+function resultsForScope(
+  games: Game[],
+  results: Result[],
+  scope: SeasonScope,
+): Result[] {
+  if (scope === ALL_SEASONS_SCOPE) return results
+  return filterResultsBySeason(games, results, scope)
+}
+
 export function getPlayerRankingStat(
   playerId: string,
   players: Parameters<typeof buildRankingStats>[0],
   results: Result[],
+  games: Game[],
+  scope: SeasonScope = ALL_SEASONS_SCOPE,
 ): RankingStat | null {
-  const stats = buildRankingStats(players, results)
+  const scoped = resultsForScope(games, results, scope)
+  const stats = buildRankingStats(players, scoped, {
+    participantsOnly: true,
+  })
   return stats.find((s) => s.player.id === playerId) ?? null
 }
 
@@ -25,11 +44,13 @@ export function getPlayerRecentGames(
   games: Game[],
   results: Result[],
   limit = 5,
+  scope: SeasonScope = ALL_SEASONS_SCOPE,
 ): PlayerRecentGame[] {
+  const scopedResults = resultsForScope(games, results, scope)
   const gameMap = new Map(games.map((g) => [g.id, g]))
   const items: PlayerRecentGame[] = []
 
-  for (const result of results) {
+  for (const result of scopedResults) {
     if (result.playerId !== playerId) continue
     const game = gameMap.get(result.gameId)
     if (!game) continue
@@ -46,9 +67,11 @@ export function computePodiumStreaks(
   playerId: string,
   games: Game[],
   results: Result[],
+  scope: SeasonScope = ALL_SEASONS_SCOPE,
 ): PodiumStreakInfo {
+  const scopedResults = resultsForScope(games, results, scope)
   const gameMap = new Map(games.map((g) => [g.id, g]))
-  const playerResults = results
+  const playerResults = scopedResults
     .filter((r) => r.playerId === playerId)
     .map((r) => ({ result: r, game: gameMap.get(r.gameId) }))
     .filter((x): x is { result: Result; game: Game } => !!x.game)

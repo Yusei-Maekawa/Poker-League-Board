@@ -1,8 +1,14 @@
 import type { Player, Result, RankingStat } from '../types'
 
+export interface BuildRankingStatsOptions {
+  /** true のとき playCount が 0 のプレイヤーを除外（シーズン別表示向け） */
+  participantsOnly?: boolean
+}
+
 export function buildRankingStats(
   players: Player[],
   results: Result[],
+  options?: BuildRankingStatsOptions,
 ): RankingStat[] {
   // gameId ごとの参加人数を集計
   const playersPerGame = new Map<string, number>()
@@ -23,6 +29,7 @@ export function buildRankingStats(
       lastPlaceCount: 0,
       avgRank: 0,
       podiumRate: 0,
+      avgTableSize: 0,
     })
   }
 
@@ -36,18 +43,25 @@ export function buildRankingStats(
     stat.totalPoint += result.point
     stat.playCount += 1
     stat.avgRank += result.rank
+    stat.avgTableSize += total
     if (result.rank === 1) stat.winCount += 1
     if (result.rank <= 3) stat.podiumCount += 1
     if (isLast) stat.lastPlaceCount += 1
   }
 
-  const stats = Array.from(statsMap.values())
+  let stats = Array.from(statsMap.values())
 
   for (const stat of stats) {
     if (stat.playCount > 0) {
       stat.avgRank = Math.round((stat.avgRank / stat.playCount) * 10) / 10
       stat.podiumRate = Math.round((stat.podiumCount / stat.playCount) * 1000) / 10
+      stat.avgTableSize =
+        Math.round((stat.avgTableSize / stat.playCount) * 10) / 10
     }
+  }
+
+  if (options?.participantsOnly) {
+    stats = stats.filter((s) => s.playCount > 0)
   }
 
   // 合計ポイント降順 → 参加回数降順

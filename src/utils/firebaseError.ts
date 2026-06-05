@@ -9,7 +9,9 @@ export function getFirebaseErrorMessage(
 
   switch (code) {
     case 'permission-denied':
-      return '権限がありません。.env の VITE_ADMIN_UIDS と Firestore ルールを確認してください。'
+      return 'エラーにより退会出来ませんでした。運営にお問合せください。'
+    case 'auth/requires-recent-login':
+      return 'セキュリティのため、一度ログアウトしてから再度 Google でログインし、もう一度お試しください。'
     case 'unavailable':
       return 'Firebase に接続できません。通信環境を確認して再試行してください。'
     default:

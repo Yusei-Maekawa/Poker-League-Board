@@ -1,35 +1,29 @@
+import { DEFAULT_SEASON_POINT_RULES } from '../constants/pointRules'
+import type { SeasonPointRules } from '../types'
+
 /**
- * ポイント計算
- * - 1位: +7
- * - 2位: +5
- * - 3位: +3
- * - 4位: +1
- * - 5位以下: 0
- * - 最下位: -2（最下位ペナルティ優先）
- *
- * @param rank - 順位（1始まり）
- * @param totalPlayers - 参加人数
+ * 順位からポイントを計算（シーズン別ルール対応）
+ * - 最下位は lastPlace を優先
+ * - 1〜4位は rank1〜rank4、5位以下（最下位以外）は rank5Plus
  */
-export function calculatePoint(rank: number, totalPlayers: number): number {
-  const isLast = rank === totalPlayers
-
-  // 最下位ペナルティ優先
-  if (isLast) return -2
-
+export function calculatePoint(
+  rank: number,
+  totalPlayers: number,
+  rules: SeasonPointRules = DEFAULT_SEASON_POINT_RULES,
+): number {
+  if (rank === totalPlayers) return rules.lastPlace
   switch (rank) {
-    case 1: return 7
-    case 2: return 5
-    case 3: return 3
-    case 4: return 1
-    default: return 0 // 5位以下（最下位でない）
+    case 1:
+      return rules.rank1
+    case 2:
+      return rules.rank2
+    case 3:
+      return rules.rank3
+    case 4:
+      return rules.rank4
+    default:
+      return rules.rank5Plus
   }
 }
 
-export const POINT_TABLE = [
-  { rank: 1, label: '1位', point: '+7' },
-  { rank: 2, label: '2位', point: '+5' },
-  { rank: 3, label: '3位', point: '+3' },
-  { rank: 4, label: '4位', point: '+1' },
-  { rank: 5, label: '5位以下', point: '0' },
-  { rank: -1, label: '最下位', point: '-2' },
-]
+export { DEFAULT_SEASON_POINT_RULES }

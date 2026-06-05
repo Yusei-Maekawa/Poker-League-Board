@@ -24,6 +24,7 @@ googleProvider.setCustomParameters({ prompt: 'select_account' })
  * - テスト: dev など別ID（番号やデータを汚さない）
  */
 export const LEAGUE_ID: string = import.meta.env.VITE_LEAGUE_ID ?? 'main'
+/** @deprecated 新規試合は config/league.activeSeasonId を使用 */
 export const SEASON_ID = 'season1'
 
 export const paths = {
@@ -33,5 +34,7 @@ export const paths = {
   results: `leagues/${LEAGUE_ID}/results`,
   announcements: `leagues/${LEAGUE_ID}/announcements`,
   activities: `leagues/${LEAGUE_ID}/activities`,
+  seasons: `leagues/${LEAGUE_ID}/seasons`,
+  leagueConfig: `leagues/${LEAGUE_ID}/config/league`,
   gameCounter: `leagues/${LEAGUE_ID}/counters/games`,
 }

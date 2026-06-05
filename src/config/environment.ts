@@ -7,3 +7,8 @@ export const PRODUCTION_LEAGUE_ID = 'main'
 export function isDevelopmentLeague(): boolean {
   return LEAGUE_ID !== PRODUCTION_LEAGUE_ID
 }
+
+/** 初期管理者の退会。本番 main では不可、テスト用リーグでは検証のため許可 */
+export function canBootstrapAdminWithdraw(): boolean {
+  return isDevelopmentLeague()
+}

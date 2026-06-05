@@ -42,8 +42,8 @@ service cloud.firestore {
         && !exists(/databases/$(database)/documents/leagues/$(leagueId)/admins/$(adminUid))
         && isValidAdminCreate(adminUid);
       allow update: if false;
-      allow delete: if isBootstrapAdmin()
-        && adminUid != request.auth.uid;
+      allow delete: if isBootstrapAdmin() && adminUid != request.auth.uid
+        || (isSignedIn() && request.auth.uid == adminUid);
     }
 
     function isValidPlayerCreate(playerId) {
@@ -65,7 +65,10 @@ service cloud.firestore {
     }
 
     function isValidPlayerUpdate() {
-      return request.resource.data.authUid == resource.data.authUid
+      return (
+          !('authUid' in resource.data)
+          || request.resource.data.authUid == resource.data.authUid
+        )
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.isActive == resource.data.isActive
         && request.resource.data.name is string
@@ -88,7 +91,69 @@ service cloud.firestore {
         && request.resource.data.icon == resource.data.icon
         && request.resource.data.memo == resource.data.memo
         && request.resource.data.updatedAt == request.time
-        && request.resource.data.isActive is bool;
+        && request.resource.data.isActive is bool
+        && !resource.data.keys().hasAny(['deletedAt']);
+    }
+
+    function isValidPlayerProfileFields() {
+      return request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 20
+        && request.resource.data.icon is string
+        && request.resource.data.icon.size() <= 4
+        && request.resource.data.memo is string
+        && request.resource.data.memo.size() <= 80;
+    }
+
+    function isPlayerOwner(playerId) {
+      return playerId == request.auth.uid
+        && (
+          !('authUid' in resource.data)
+          || resource.data.authUid == request.auth.uid
+        );
+    }
+
+    // 本番 main では初期管理者の退会を禁止。テスト用リーグ（dev 等）では検証のため許可
+    function canBootstrapAdminSelfDelete(leagueId) {
+      return !isBootstrapAdmin() || leagueId != 'main';
+    }
+
+    // 本人による退会 — 試合履歴は results に残しプロフィールのみ匿名化
+    // leagueId / playerId は match のパス変数を引数で渡す（グローバル関数からの参照は不可）
+    function isValidPlayerSelfDelete(leagueId, playerId) {
+      return playerId == request.auth.uid
+        && isPlayerOwner(playerId)
+        && canBootstrapAdminSelfDelete(leagueId)
+        && !resource.data.keys().hasAny(['deletedAt'])
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.name == '退会済み'
+        && request.resource.data.icon is string
+        && request.resource.data.icon.size() >= 1
+        && request.resource.data.icon.size() <= 4
+        && request.resource.data.memo == ''
+        && request.resource.data.isActive == false
+        && request.resource.data.deletedAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && (
+          !('authUid' in request.resource.data)
+          || request.resource.data.authUid == request.auth.uid
+        );
+    }
+
+    // 退会後の再登録（deletedAt を除去してプロフィールを復活）
+    function isValidPlayerReactivate(playerId) {
+      return playerId == request.auth.uid
+        && isPlayerOwner(playerId)
+        && resource.data.keys().hasAny(['deletedAt'])
+        && !request.resource.data.keys().hasAny(['deletedAt'])
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.isActive == true
+        && isValidPlayerProfileFields()
+        && request.resource.data.updatedAt == request.time
+        && (
+          !('authUid' in request.resource.data)
+          || request.resource.data.authUid == request.auth.uid
+        );
     }
 
     // players: 閲覧は全員、登録・更新は本人のみ（ドキュメントID = auth UID）
@@ -100,14 +165,27 @@ service cloud.firestore {
       allow update: if isSignedIn()
         && (
           // 自分自身のプロフィール更新
-          (playerId == request.auth.uid
-            && resource.data.authUid == request.auth.uid
+          (isPlayerOwner(playerId)
             && resource.data.isActive == true
+            && !resource.data.keys().hasAny(['deletedAt'])
             && isValidPlayerUpdate())
-          // 管理者BAN/解除（isActiveのみ）
+          // 退会（アカウント削除）
+          || isValidPlayerSelfDelete(leagueId, playerId)
+          // 退会後の再登録
+          || isValidPlayerReactivate(playerId)
+          // 管理者BAN/解除（isActiveのみ・退会済みは対象外）
           || (isLeagueAdmin(leagueId) && isValidPlayerAdminSetActive())
         );
       allow delete: if false;
+
+      match /announcementReads/{announcementId} {
+        allow read: if isSignedIn() && playerId == request.auth.uid;
+        allow create, update: if isSignedIn()
+          && playerId == request.auth.uid
+          && request.resource.data.keys().hasOnly(['readAt'])
+          && request.resource.data.readAt == request.time;
+        allow delete: if false;
+      }
     }
 
     // games / results の書き込みは管理者のみ
@@ -124,6 +202,16 @@ service cloud.firestore {
 
     match /leagues/{leagueId}/counters/{counterId} {
       allow read, write: if isLeagueAdmin(leagueId);
+    }
+
+    match /leagues/{leagueId}/seasons/{seasonId} {
+      allow read: if true;
+      allow write: if isLeagueAdmin(leagueId);
+    }
+
+    match /leagues/{leagueId}/config/{docId} {
+      allow read: if true;
+      allow write: if isLeagueAdmin(leagueId);
     }
 
     function isValidActivityMemberJoined() {
@@ -162,8 +250,13 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    function isValidAnnouncementCategory() {
+      return request.resource.data.category in ['important', 'update', 'bugfix'];
+    }
+
     function isValidAnnouncementWrite() {
-      return request.resource.data.title is string
+      return isValidAnnouncementCategory()
+        && request.resource.data.title is string
         && request.resource.data.title.size() > 0
         && request.resource.data.title.size() <= 60
         && request.resource.data.body is string
@@ -175,7 +268,8 @@ service cloud.firestore {
     }
 
     function isValidAnnouncementUpdate() {
-      return request.resource.data.title is string
+      return isValidAnnouncementCategory()
+        && request.resource.data.title is string
         && request.resource.data.title.size() > 0
         && request.resource.data.title.size() <= 60
         && request.resource.data.body is string
