@@ -9,7 +9,7 @@ export function getFirebaseErrorMessage(
 
   switch (code) {
     case 'permission-denied':
-      return 'エラーにより退会出来ませんでした。運営にお問合せください。'
+      return 'この操作を行う権限がありません。管理者としてログインしているか、Firestore Rules が最新か確認してください。'
     case 'auth/requires-recent-login':
       return 'セキュリティのため、一度ログアウトしてから再度 Google でログインし、もう一度お試しください。'
     case 'unavailable':

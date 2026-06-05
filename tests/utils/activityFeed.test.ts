@@ -6,6 +6,8 @@ import {
   getActivityTimeLabel,
   isActivityNew,
   isWithinLastHours,
+  planGameActivityRepairs,
+  resolveActivitySeasonLabel,
 } from '../../src/utils/activityFeed'
 import type { Activity } from '../../src/types'
 
@@ -124,5 +126,80 @@ describe('getActivityDisplayMeta', () => {
     expect(meta.title).toBe('第3戦の結果が追加されました')
     expect(meta.timeLabel).toContain('2025年5月20日 20:00')
     expect(meta.timeLabel).toContain('10分前')
+  })
+
+  it('includes season label in game_added title when provided', () => {
+    const meta = getActivityDisplayMeta(
+      {
+        id: 'a1',
+        type: 'game_added',
+        gameNo: 5,
+        createdAt: mockTimestamp(10 * 60 * 1000) as Activity['createdAt'],
+      },
+      { seasonLabel: 'Season 3' },
+    )
+    expect(meta.title).toBe('「Season 3」第5戦の結果が追加されました')
+  })
+})
+
+describe('resolveActivitySeasonLabel', () => {
+  it('prefers snapshot label, then seasonId, then game season', () => {
+    const seasons = [
+      { id: 'season1', label: 'Season 1' },
+      { id: 'season3', label: 'Season 3' },
+    ]
+    expect(
+      resolveActivitySeasonLabel(
+        { type: 'game_added', seasonLabel: '春のバウンティ' },
+        seasons,
+      ),
+    ).toBe('春のバウンティ')
+    expect(
+      resolveActivitySeasonLabel(
+        { type: 'game_added', seasonId: 'season3' },
+        seasons,
+      ),
+    ).toBe('Season 3')
+    expect(
+      resolveActivitySeasonLabel({ type: 'game_added' }, seasons, 'season1'),
+    ).toBe('Season 1')
+  })
+})
+
+describe('planGameActivityRepairs', () => {
+  const seasons = [
+    { id: 'season1', label: 'Season 1' },
+    { id: 'season3', label: 'Season 3' },
+  ]
+
+  it('deletes orphan game_added and updates stale gameNo', () => {
+    const plan = planGameActivityRepairs(
+      [{ id: 'g1', gameNo: 5, seasonId: 'season3' }],
+      [
+        {
+          id: 'a1',
+          type: 'game_added',
+          gameId: 'g1',
+          gameNo: 3,
+        },
+        {
+          id: 'a2',
+          type: 'game_added',
+          gameId: 'missing',
+          gameNo: 1,
+        },
+      ],
+      seasons,
+    )
+
+    expect(plan.deleteIds).toEqual(['a2'])
+    expect(plan.updates).toEqual([
+      {
+        id: 'a1',
+        gameNo: 5,
+        seasonId: 'season3',
+        seasonLabel: 'Season 3',
+      },
+    ])
   })
 })

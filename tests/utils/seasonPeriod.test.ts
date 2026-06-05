@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { Season } from '../../src/types'
-import { resolveActiveSeasonId } from '../../src/utils/seasonPeriod'
+import {
+  resolveActiveSeasonId,
+  resolveGameSeasonId,
+} from '../../src/utils/seasonPeriod'
 import { mockTimestamp } from '../helpers/fixtures'
 
 function season(
@@ -56,6 +59,38 @@ describe('resolveActiveSeasonId', () => {
 
     expect(resolveActiveSeasonId(seasons, 'config-fallback', now)).toBe(
       'config-fallback',
+    )
+  })
+})
+
+describe('resolveGameSeasonId', () => {
+  const now = new Date('2026-06-15T12:00:00').getTime()
+
+  it('uses manual config in manual mode', () => {
+    const seasons = [
+      season({
+        id: 'season2',
+        order: 2,
+        startsAt: mockTimestamp(now - 86400000),
+        endsAt: mockTimestamp(now + 86400000),
+      }),
+    ]
+    expect(resolveGameSeasonId(seasons, 'season0', 'manual', now)).toBe(
+      'season0',
+    )
+  })
+
+  it('uses period resolution in period mode', () => {
+    const seasons = [
+      season({
+        id: 'season2',
+        order: 2,
+        startsAt: mockTimestamp(now - 86400000),
+        endsAt: mockTimestamp(now + 86400000),
+      }),
+    ]
+    expect(resolveGameSeasonId(seasons, 'season0', 'period', now)).toBe(
+      'season2',
     )
   })
 })

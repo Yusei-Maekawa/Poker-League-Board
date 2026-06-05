@@ -5,6 +5,7 @@ import { StickyFeedback } from '../components/StickyFeedback'
 import { Loading } from '../components/Loading'
 import { usePlayers, useActivePlayers } from '../hooks/usePlayers'
 import { useGames } from '../hooks/useGames'
+import { suggestNextGameNo } from '../utils/validateGameNo'
 import { useAuth } from '../hooks/useAuth'
 import { useSeasons } from '../hooks/useSeasons'
 import { calculatePoint } from '../utils/point'
@@ -21,13 +22,20 @@ export function NewGamePage() {
   const navigate = useNavigate()
   const { isAdmin, loading: authLoading } = useAuth()
   const { players, loading: playersLoading } = usePlayers()
-  const { addGameWithResults } = useGames()
+  const { games, loading: gamesLoading, addGameWithResults } = useGames()
   const { seasons, activeSeasonId } = useSeasons()
 
-  const pointRules = useMemo(() => {
-    const season = seasons.find((s) => s.id === activeSeasonId)
-    return getPointRulesForSeason(season)
-  }, [seasons, activeSeasonId])
+  const gameSeason = seasons.find((s) => s.id === activeSeasonId)
+
+  const pointRules = useMemo(
+    () => getPointRulesForSeason(gameSeason),
+    [gameSeason],
+  )
+
+  const nextGameNo = useMemo(
+    () => suggestNextGameNo(games, activeSeasonId),
+    [games, activeSeasonId],
+  )
 
   const activePlayers = useActivePlayers(players).filter((p) => p.authUid)
 
@@ -39,7 +47,13 @@ export function NewGamePage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
-  if (authLoading || playersLoading) return <Layout><Loading /></Layout>
+  if (authLoading || playersLoading || gamesLoading) {
+    return (
+      <Layout>
+        <Loading />
+      </Layout>
+    )
+  }
 
   if (!isAdmin) {
     return (
@@ -89,6 +103,7 @@ export function NewGamePage() {
       setError(validationError)
       return
     }
+
     setError('')
     setSubmitting(true)
 
@@ -136,6 +151,27 @@ export function NewGamePage() {
           <h2 className="text-white/60 text-xs font-semibold uppercase tracking-wider">
             基本情報
           </h2>
+
+          <div className="rounded-lg bg-gold-500/10 border border-gold-500/25 px-3 py-3">
+            <p className="text-white/50 text-xs mb-1">採番（自動）</p>
+            <p className="text-white text-sm">
+              <span className="text-gold-400/90 font-medium">
+                {gameSeason?.label ?? activeSeasonId}
+              </span>
+              <span className="text-white/40 mx-2">·</span>
+              <span className="font-mono text-white/80">第{nextGameNo}戦</span>
+            </p>
+            <p className="text-white/40 text-xs mt-2 leading-relaxed">
+              シーズンと番号は
+              <Link
+                to="/admin/seasons"
+                className="text-gold-400/80 hover:text-gold-300 mx-1"
+              >
+                シーズン管理
+              </Link>
+              の「試合採番シーズン」で変更できます。
+            </p>
+          </div>
 
           <div>
             <label className="label">開催日 *</label>

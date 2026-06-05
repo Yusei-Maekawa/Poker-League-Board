@@ -16,7 +16,12 @@ import {
 } from '../components/SeasonUserDisplay'
 import { APP_NAME } from '../constants/app'
 import { buildRankingStats } from '../utils/ranking'
-import { filterResultsBySeason, getSeasonLabelForGame } from '../utils/season'
+import {
+  filterGamesBySeason,
+  filterResultsBySeason,
+  getSeasonLabelForGame,
+} from '../utils/season'
+import { compareGamesByRecency } from '../utils/gameSort'
 
 export function HomePage() {
   const { user, isAdmin, myPlayer } = useAuth()
@@ -39,10 +44,13 @@ export function HomePage() {
     ? `🏆 ${activeSeason.label}`
     : '🏆 ランキング'
 
-  // 直近3試合（gameNo降順）
-  const recentGames = [...games]
-    .sort((a, b) => b.gameNo - a.gameNo)
-    .slice(0, 3)
+  const recentGames = useMemo(
+    () =>
+      filterGamesBySeason(games, activeSeasonId)
+        .sort(compareGamesByRecency)
+        .slice(0, 3),
+    [games, activeSeasonId],
+  )
 
   return (
     <Layout>
@@ -130,7 +138,13 @@ export function HomePage() {
             <section className="mb-8 lg:mb-0">
               <SectionHeader title="🎮 直近の試合" link="/games" linkLabel="全て見る" />
               {recentGames.length === 0 ? (
-                <EmptyState text="まだ試合がありません" />
+                <EmptyState
+                  text={
+                    activeSeason
+                      ? `${activeSeason.label} にはまだ試合がありません`
+                      : 'まだ試合がありません'
+                  }
+                />
               ) : (
                 <div className="space-y-2">
                   {recentGames.map((game) => {

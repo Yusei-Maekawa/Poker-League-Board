@@ -136,7 +136,7 @@ export function SeasonsScheduleCard({ seasons }: { seasons: Season[] }) {
         })}
       </ul>
       <p className="text-white/35 text-[10px] mt-3 leading-relaxed">
-        試合の記録は、開催中のシーズンに自動で紐づきます。ランキングで公開されているシーズンは切り替えて確認できます。
+        ランキングで公開されているシーズンは切り替えて確認できます。
       </p>
     </section>
   )

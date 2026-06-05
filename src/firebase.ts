@@ -36,5 +36,10 @@ export const paths = {
   activities: `leagues/${LEAGUE_ID}/activities`,
   seasons: `leagues/${LEAGUE_ID}/seasons`,
   leagueConfig: `leagues/${LEAGUE_ID}/config/league`,
-  gameCounter: `leagues/${LEAGUE_ID}/counters/games`,
+  counters: `leagues/${LEAGUE_ID}/counters`,
+  /** v0.3 以前のリーグ通しカウンター（削除対象） */
+  legacyGameCounter: `leagues/${LEAGUE_ID}/counters/games`,
+  /** シーズンごとの試合番号カウンター（nextGameNo） */
+  gameCounter: (seasonId: string) =>
+    `leagues/${LEAGUE_ID}/counters/${seasonId}`,
 }

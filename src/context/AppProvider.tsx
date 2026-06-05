@@ -43,7 +43,8 @@ import {
   validateSeasonLabel,
 } from '../utils/seasonAdmin'
 import {
-  resolveActiveSeasonId,
+  normalizeGameSeasonMode,
+  resolveGameSeasonId,
   resolveSeasonPeriodFromFields,
   type SeasonPeriodFields,
 } from '../utils/seasonPeriod'
@@ -51,6 +52,7 @@ import type {
   Activity,
   Announcement,
   Game,
+  GameSeasonMode,
   LeagueConfig,
   Player,
   Result,
@@ -62,7 +64,14 @@ import {
   normalizeSeasonPointRules,
   validateSeasonPointRules,
 } from '../utils/seasonPointRules'
-import { allocateGameNo } from '../utils/allocateGameNo'
+import {
+  allocateGameNo,
+  bumpGameCounterFromGames,
+  repairGameCounters,
+  repairGameCountersFromGamesOnly,
+} from '../utils/allocateGameNo'
+import { getGameSeasonId, getSeasonLabelForGame } from '../utils/season'
+import { repairGameActivities } from '../utils/activityFeed'
 import {
   normalizeAnnouncementCategory,
   sortAnnouncements,
@@ -119,11 +128,14 @@ type AppContextValue = {
     date: string
     appName: string
     memo: string
+    seasonId?: string
   }) => Promise<{ id: string; gameNo: number }>
   addGameWithResults: (params: {
     date: string
     appName: string
     memo: string
+    seasonId?: string
+    gameNo?: number
     entries: { playerId: string; rank: number; point: number }[]
   }) => Promise<{ id: string; gameNo: number }>
   updateGameWithResults: (
@@ -132,6 +144,7 @@ type AppContextValue = {
       date: string
       appName: string
       memo: string
+      gameNo?: number
       entries: { playerId: string; rank: number; point: number }[]
     },
   ) => Promise<void>
@@ -187,6 +200,28 @@ type AppContextValue = {
     seasonId: string,
     rules: Partial<SeasonPointRules>,
   ) => Promise<void>
+  /** 新規試合の採番シーズン（config/league.activeSeasonId） */
+  setActiveSeasonForGames: (seasonId: string) => Promise<void>
+  setGameSeasonMode: (mode: GameSeasonMode) => Promise<void>
+  /** 試合データから counters/{seasonId} を再同期（旧 counters/games 削除のみ） */
+  repairGameCountersOnlyFromGames: () => Promise<{
+    nextBySeason: Record<string, number>
+    removedLegacyCounter: boolean
+  }>
+
+  /** 削除済み試合の game_added アクティビティ削除 + 残りの gameNo 更新 */
+  repairGameActivitiesFromGames: () => Promise<{
+    removedOrphanActivities: number
+    updatedActivityGameNos: number
+  }>
+  /** 試合データから counters/{seasonId} を再同期し、counters/games を削除 */
+  repairGameCountersFromGames: () => Promise<{
+    nextBySeason: Record<string, number>
+    removedLegacyCounter: boolean
+    removedOrphanActivities: number
+    updatedActivityGameNos: number
+    activityRepairFailed: boolean
+  }>
 
   activities: Activity[]
   activitiesLoading: boolean
@@ -227,14 +262,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activities, setActivities] = useState<Activity[]>([])
   const [activitiesLoading, setActivitiesLoading] = useState(true)
 
-  const [leagueSeasons, setLeagueSeasons] = useState<Season[]>([])
   const configActiveSeasonIdRef = useRef(DEFAULT_SEASON_ID)
+  const gameSeasonModeRef = useRef<GameSeasonMode>('manual')
+  const leagueSeasonsRef = useRef<Season[]>([])
   const activeSeasonIdRef = useRef(DEFAULT_SEASON_ID)
 
-  const syncActiveSeasonForNewGames = useCallback((seasons: Season[]) => {
-    activeSeasonIdRef.current = resolveActiveSeasonId(
-      seasons,
+  const syncGameSeasonRef = useCallback(() => {
+    activeSeasonIdRef.current = resolveGameSeasonId(
+      leagueSeasonsRef.current,
       configActiveSeasonIdRef.current,
+      gameSeasonModeRef.current,
     )
   }, [])
 
@@ -248,31 +285,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (data.activeSeasonId) {
             configActiveSeasonIdRef.current = data.activeSeasonId
           }
+          gameSeasonModeRef.current = normalizeGameSeasonMode(data.gameSeasonMode)
         } else {
           configActiveSeasonIdRef.current = DEFAULT_SEASON_ID
+          gameSeasonModeRef.current = 'manual'
         }
-        syncActiveSeasonForNewGames(leagueSeasons)
+        syncGameSeasonRef()
       },
       (err) => console.error('league config:', err),
     )
     return unsubscribe
-  }, [leagueSeasons, syncActiveSeasonForNewGames])
+  }, [syncGameSeasonRef])
 
   useEffect(() => {
     const q = query(collection(db, paths.seasons), orderBy('order', 'asc'))
     const unsubscribe = onSnapshot(
       q,
       (snap) => {
-        const items = snap.docs.map(
+        leagueSeasonsRef.current = snap.docs.map(
           (d) => ({ id: d.id, ...d.data() }) as Season,
         )
-        setLeagueSeasons(items)
-        syncActiveSeasonForNewGames(items)
+        syncGameSeasonRef()
       },
       (err) => console.error('seasons:', err),
     )
     return unsubscribe
-  }, [syncActiveSeasonForNewGames])
+  }, [syncGameSeasonRef])
 
   // --- Auth（スプラッシュ中から開始） ---
   useEffect(() => {
@@ -624,13 +662,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const addGame = useCallback(
-    async (params: { date: string; appName: string; memo: string }) => {
-      const gameNo = await allocateGameNo(db, paths.games, paths.gameCounter)
+    async (params: {
+      date: string
+      appName: string
+      memo: string
+      seasonId?: string
+    }) => {
+      const seasonId = params.seasonId?.trim() || activeSeasonIdRef.current
+      const gameNo = await allocateGameNo(
+        db,
+        paths.games,
+        paths.gameCounter(seasonId),
+        seasonId,
+      )
       const { appName, memo } = sanitizeGameText(params)
       const time = getDefaultGameTime()
       const docRef = await addDoc(collection(db, paths.games), {
         gameNo,
-        seasonId: activeSeasonIdRef.current,
+        seasonId,
         date: params.date,
         time,
         appName,
@@ -648,9 +697,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
       date: string
       appName: string
       memo: string
+      seasonId?: string
+      gameNo?: number
       entries: { playerId: string; rank: number; point: number }[]
     }) => {
-      const gameNo = await allocateGameNo(db, paths.games, paths.gameCounter)
+      const seasonId = params.seasonId?.trim() || activeSeasonIdRef.current
+      const gameNo =
+        params.gameNo !== undefined
+          ? params.gameNo
+          : await allocateGameNo(
+              db,
+              paths.games,
+              paths.gameCounter(seasonId),
+              seasonId,
+            )
       const gamesRef = collection(db, paths.games)
       const resultsRef = collection(db, paths.results)
       const gameRef = doc(gamesRef)
@@ -659,7 +719,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const time = getDefaultGameTime()
       batch.set(gameRef, {
         gameNo,
-        seasonId: activeSeasonIdRef.current,
+        seasonId,
         date: params.date,
         time,
         appName,
@@ -677,6 +737,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       const actorUid = auth.currentUser?.uid
       if (!actorUid) throw new Error('ログインが必要です')
+      const seasonLabel = getSeasonLabelForGame(
+        { seasonId },
+        leagueSeasonsRef.current,
+      )
       const activityRef = doc(collection(db, paths.activities))
       batch.set(activityRef, {
         type: 'game_added',
@@ -684,10 +748,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
         gameNo,
         gameDate: params.date,
         gameTime: time,
+        seasonId,
+        seasonLabel,
         actorUid,
         createdAt: serverTimestamp(),
       })
       await batch.commit()
+
+      if (params.gameNo !== undefined) {
+        await bumpGameCounterFromGames(
+          db,
+          paths.games,
+          paths.gameCounter(seasonId),
+          seasonId,
+        )
+      }
+
       return { id: gameRef.id, gameNo }
     },
     [],
@@ -700,6 +776,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         date: string
         appName: string
         memo: string
+        gameNo?: number
         entries: { playerId: string; rank: number; point: number }[]
       },
     ) => {
@@ -710,12 +787,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const batch = writeBatch(db)
       const gameRef = doc(db, paths.games, gameId)
       const { appName, memo } = sanitizeGameText(params)
-      batch.update(gameRef, {
+      const gamePatch: Record<string, unknown> = {
         date: params.date,
         appName,
         memo,
         updatedAt: serverTimestamp(),
-      })
+      }
+      if (params.gameNo !== undefined) {
+        gamePatch.gameNo = params.gameNo
+      }
+      batch.update(gameRef, gamePatch)
+
+      if (params.gameNo !== undefined) {
+        const activitiesSnap = await getDocs(
+          query(
+            collection(db, paths.activities),
+            where('gameId', '==', gameId),
+          ),
+        )
+        for (const activityDoc of activitiesSnap.docs) {
+          batch.update(activityDoc.ref, { gameNo: params.gameNo })
+        }
+      }
+
       for (const resultDoc of existingResults.docs) {
         batch.delete(resultDoc.ref)
       }
@@ -728,6 +822,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
         })
       }
       await batch.commit()
+
+      if (params.gameNo !== undefined) {
+        const gameSnap = await getDoc(gameRef)
+        const seasonId = getGameSeasonId(
+          (gameSnap.data() ?? {}) as Pick<Game, 'seasonId'>,
+        )
+        await bumpGameCounterFromGames(
+          db,
+          paths.games,
+          paths.gameCounter(seasonId),
+          seasonId,
+        )
+      }
     },
     [],
   )
@@ -871,20 +978,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     )
     await batch.commit()
     configActiveSeasonIdRef.current = DEFAULT_SEASON_ID
-    syncActiveSeasonForNewGames(
-      existing.exists()
-        ? leagueSeasons
-        : [
-            {
-              id: DEFAULT_SEASON_ID,
-              label: 'Season 1',
-              order: 1,
-              createdAt: Timestamp.now(),
-              updatedAt: Timestamp.now(),
-            },
-          ],
-    )
-  }, [leagueSeasons, syncActiveSeasonForNewGames])
+    syncGameSeasonRef()
+  }, [syncGameSeasonRef])
 
   const createSeasonWithPeriod = useCallback(
     async (params: { period: SeasonPeriodFields; label: string }) => {
@@ -943,11 +1038,87 @@ export function AppProvider({ children }: { children: ReactNode }) {
         newSeason.startsAt = resolved.ok.startsAt
         newSeason.endsAt = resolved.ok.endsAt
       }
-      syncActiveSeasonForNewGames([...existing, newSeason])
+      configActiveSeasonIdRef.current = planned.id
+      syncGameSeasonRef()
       return { id: planned.id, label }
     },
-    [syncActiveSeasonForNewGames],
+    [syncGameSeasonRef],
   )
+
+  const setActiveSeasonForGames = useCallback(async (seasonId: string) => {
+    const trimmed = seasonId.trim()
+    if (!trimmed) throw new Error('シーズンを選択してください')
+    const seasonRef = doc(db, paths.seasons, trimmed)
+    const snap = await getDoc(seasonRef)
+    if (!snap.exists()) {
+      throw new Error('シーズンが見つかりません')
+    }
+    await setDoc(
+      doc(db, paths.leagueConfig),
+      { activeSeasonId: trimmed, updatedAt: serverTimestamp() },
+      { merge: true },
+    )
+    configActiveSeasonIdRef.current = trimmed
+    syncGameSeasonRef()
+  }, [syncGameSeasonRef])
+
+  const setGameSeasonMode = useCallback(async (mode: GameSeasonMode) => {
+    const normalized = normalizeGameSeasonMode(mode)
+    await setDoc(
+      doc(db, paths.leagueConfig),
+      { gameSeasonMode: normalized, updatedAt: serverTimestamp() },
+      { merge: true },
+    )
+    gameSeasonModeRef.current = normalized
+    syncGameSeasonRef()
+  }, [syncGameSeasonRef])
+
+  const repairGameCountersOnlyFromGames = useCallback(async () => {
+    const seasonsSnap = await getDocs(
+      query(collection(db, paths.seasons), orderBy('order', 'asc')),
+    )
+    const seasonIds = seasonsSnap.docs.map((d) => d.id)
+    const result = await repairGameCountersFromGamesOnly(
+      db,
+      paths.games,
+      paths.counters,
+      paths.legacyGameCounter,
+      seasonIds,
+    )
+    syncGameSeasonRef()
+    return result
+  }, [syncGameSeasonRef])
+
+  const loadSeasonSummaries = useCallback(async () => {
+    const seasonsSnap = await getDocs(
+      query(collection(db, paths.seasons), orderBy('order', 'asc')),
+    )
+    return seasonsSnap.docs.map((d) => ({
+      id: d.id,
+      label: String(d.data().label ?? d.id),
+    }))
+  }, [])
+
+  const repairGameActivitiesFromGames = useCallback(async () => {
+    const seasons = await loadSeasonSummaries()
+    return repairGameActivities(db, paths.games, paths.activities, seasons)
+  }, [loadSeasonSummaries])
+
+  const repairGameCountersFromGames = useCallback(async () => {
+    const seasons = await loadSeasonSummaries()
+    const seasonIds = seasons.map((s) => s.id)
+    const result = await repairGameCounters(
+      db,
+      paths.games,
+      paths.counters,
+      paths.legacyGameCounter,
+      paths.activities,
+      seasonIds,
+      seasons,
+    )
+    syncGameSeasonRef()
+    return result
+  }, [syncGameSeasonRef, loadSeasonSummaries])
 
   const updateSeasonLabel = useCallback(async (seasonId: string, label: string) => {
     const labelErr = validateSeasonLabel(label)
@@ -1118,6 +1289,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateSeasonPeriod,
       updateSeasonShowInRanking,
       updateSeasonPointRules,
+      setActiveSeasonForGames,
+      setGameSeasonMode,
+      repairGameCountersOnlyFromGames,
+      repairGameCountersFromGames,
+      repairGameActivitiesFromGames,
       activities,
       activitiesLoading,
       homeDataReady,
@@ -1166,6 +1342,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateSeasonPeriod,
       updateSeasonShowInRanking,
       updateSeasonPointRules,
+      setActiveSeasonForGames,
+      setGameSeasonMode,
+      repairGameCountersOnlyFromGames,
+      repairGameCountersFromGames,
+      repairGameActivitiesFromGames,
       activities,
       activitiesLoading,
       homeDataReady,

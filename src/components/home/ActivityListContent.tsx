@@ -1,10 +1,12 @@
 import { Link } from 'react-router-dom'
-import type { Activity } from '../../types'
+import type { Activity, Game, Season } from '../../types'
 import {
   getActivityDisplayMeta,
   getActivityTypeLabel,
   isActivityNew,
+  resolveActivitySeasonLabel,
 } from '../../utils/activityFeed'
+import { getGameSeasonId } from '../../utils/season'
 
 export function resolveActivityLink(
   activity: Activity,
@@ -37,6 +39,8 @@ export function isActivityMuted(
 type ActivityListContentProps = {
   activities: Activity[]
   gamesExist: (gameId: string) => boolean
+  seasons?: Pick<Season, 'id' | 'label'>[]
+  games?: Pick<Game, 'id' | 'seasonId'>[]
   /** モーダル内でリンクタップ時に閉じる */
   onNavigate?: () => void
   compact?: boolean
@@ -45,6 +49,8 @@ type ActivityListContentProps = {
 export function ActivityListContent({
   activities,
   gamesExist,
+  seasons = [],
+  games = [],
   onNavigate,
   compact = false,
 }: ActivityListContentProps) {
@@ -71,6 +77,8 @@ export function ActivityListContent({
               linkTo={linkTo}
               muted={muted}
               compact={compact}
+              seasons={seasons}
+              games={games}
               onNavigate={onNavigate}
             />
           </li>
@@ -85,15 +93,25 @@ function ActivityListRow({
   linkTo,
   muted,
   compact,
+  seasons,
+  games,
   onNavigate,
 }: {
   activity: Activity
   linkTo: string | null
   muted: boolean
   compact: boolean
+  seasons: Pick<Season, 'id' | 'label'>[]
+  games: Pick<Game, 'id' | 'seasonId'>[]
   onNavigate?: () => void
 }) {
-  const meta = getActivityDisplayMeta(activity)
+  const linkedGame = games.find((g) => g.id === activity.gameId)
+  const seasonLabel = resolveActivitySeasonLabel(
+    activity,
+    seasons,
+    linkedGame ? getGameSeasonId(linkedGame) : null,
+  )
+  const meta = getActivityDisplayMeta(activity, { seasonLabel })
   const isNew = isActivityNew(activity)
   const typeLabel = getActivityTypeLabel(activity.type)
 

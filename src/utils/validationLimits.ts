@@ -4,6 +4,8 @@ export const GAME_LIMITS = {
   appName: 40,
   memo: 100,
   maxParticipants: 20,
+  gameNoMin: 1,
+  gameNoMax: 9999,
 } as const
 
 export const PLAYER_LIMITS = {
