@@ -1,7 +1,12 @@
 import { Timestamp } from 'firebase/firestore'
-import type { Season } from '../types'
-import { formatTimestamp } from './formatDateTime'
-import { normalizeGameTime } from './formatDateTime'
+import type { GameSeasonMode, Season } from '../types'
+import { formatTimestamp, normalizeGameTime } from './formatDateTime'
+
+export const DEFAULT_GAME_SEASON_MODE: GameSeasonMode = 'manual'
+
+export function normalizeGameSeasonMode(value: unknown): GameSeasonMode {
+  return value === 'period' ? 'period' : 'manual'
+}
 
 export type SeasonPeriodPhase = 'unset' | 'upcoming' | 'current' | 'ended'
 
@@ -277,7 +282,7 @@ export function getSeasonPeriodPhaseLabel(phase: SeasonPeriodPhase): string {
   return PHASE_LABEL[phase]
 }
 
-/** いま新規試合に付与する seasonId（期間内のシーズンを優先、なければ config） */
+/** 期間内シーズンを優先して ID を返す。該当なしは configActiveSeasonId */
 export function resolveActiveSeasonId(
   seasons: Season[],
   configActiveSeasonId: string,
@@ -293,6 +298,19 @@ export function resolveActiveSeasonId(
     .sort((a, b) => b.order - a.order)
 
   if (inPeriod.length > 0) return inPeriod[0].id
+  return configActiveSeasonId
+}
+
+/** 採番モードに応じた有効シーズン ID（表示・新規試合共通） */
+export function resolveGameSeasonId(
+  seasons: Season[],
+  configActiveSeasonId: string,
+  mode: GameSeasonMode = DEFAULT_GAME_SEASON_MODE,
+  nowMs = Date.now(),
+): string {
+  if (mode === 'period') {
+    return resolveActiveSeasonId(seasons, configActiveSeasonId, nowMs)
+  }
   return configActiveSeasonId
 }
 

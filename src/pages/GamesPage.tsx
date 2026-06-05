@@ -8,6 +8,7 @@ import { useResults } from '../hooks/useResults'
 import { useAuth } from '../hooks/useAuth'
 import { useSeasons } from '../hooks/useSeasons'
 import { getSeasonLabelForGame } from '../utils/season'
+import { compareGamesByRecency } from '../utils/gameSort'
 
 export function GamesPage() {
   const { isAdmin } = useAuth()
@@ -18,7 +19,7 @@ export function GamesPage() {
 
   const loading = playersLoading || gamesLoading || resultsLoading || seasonsLoading
 
-  const sortedGames = [...games].sort((a, b) => b.gameNo - a.gameNo)
+  const sortedGames = [...games].sort(compareGamesByRecency)
 
   return (
     <Layout>

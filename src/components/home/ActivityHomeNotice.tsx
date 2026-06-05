@@ -1,23 +1,38 @@
 import { useMemo } from 'react'
 import { useActivities } from '../../hooks/useActivities'
+import { useGames } from '../../hooks/useGames'
+import { useSeasons } from '../../hooks/useSeasons'
 import { useActivityHub } from '../../context/ActivityHubContext'
 import {
   countNewActivities,
   getActivityDisplayMeta,
   isActivityNew,
+  resolveActivitySeasonLabel,
 } from '../../utils/activityFeed'
+import { getGameSeasonId } from '../../utils/season'
 
 /** 直近1時間の新着があるときだけホームに表示する告知バナー */
 export function ActivityHomeNotice() {
   const { openList } = useActivityHub()
   const { activities, loading } = useActivities()
+  const { games } = useGames()
+  const { seasons } = useSeasons()
 
   const newCount = useMemo(() => countNewActivities(activities), [activities])
   const latestNew = useMemo(
     () => activities.find(isActivityNew),
     [activities],
   )
-  const preview = latestNew ? getActivityDisplayMeta(latestNew) : null
+  const preview = useMemo(() => {
+    if (!latestNew) return null
+    const linkedGame = games.find((g) => g.id === latestNew.gameId)
+    const seasonLabel = resolveActivitySeasonLabel(
+      latestNew,
+      seasons,
+      linkedGame ? getGameSeasonId(linkedGame) : null,
+    )
+    return getActivityDisplayMeta(latestNew, { seasonLabel })
+  }, [latestNew, games, seasons])
 
   if (loading || newCount === 0) return null
 

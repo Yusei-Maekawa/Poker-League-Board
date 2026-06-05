@@ -13,10 +13,12 @@ import { calculatePoint } from '../utils/point'
 import { getPointRulesForSeason } from '../utils/seasonPointRules'
 import { LimitedTextField } from '../components/LimitedTextField'
 import { validateGameForm, parseRankInput } from '../utils/validateGame'
+import { validateGameNo, parseGameNoInput } from '../utils/validateGameNo'
 import { GAME_LIMITS } from '../utils/validationLimits'
 import { getFirebaseErrorMessage } from '../utils/firebaseError'
 import { CPU_PARTICIPANTS } from '../constants/cpuPlayers'
 import { resolveParticipant } from '../utils/gameParticipant'
+import { getGameSeasonId } from '../utils/season'
 
 export function EditGamePage() {
   const { gameId } = useParams<{ gameId: string }>()
@@ -35,6 +37,7 @@ export function EditGamePage() {
   }, [game?.seasonId, seasons])
 
   const [date, setDate] = useState('')
+  const [gameNoInput, setGameNoInput] = useState('')
   const [appName, setAppName] = useState('')
   const [memo, setMemo] = useState('')
   const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>([])
@@ -47,6 +50,7 @@ export function EditGamePage() {
     if (!game || resultsLoading || initialized) return
 
     setDate(game.date)
+    setGameNoInput(String(game.gameNo))
     setAppName(game.appName)
     setMemo(game.memo)
 
@@ -131,6 +135,22 @@ export function EditGamePage() {
       return
     }
 
+    const parsedGameNo = parseGameNoInput(gameNoInput)
+    if (parsedGameNo === undefined) {
+      setError('試合番号を入力してください')
+      return
+    }
+    const gameNoError = validateGameNo(
+      parsedGameNo,
+      games,
+      gameId,
+      getGameSeasonId(game),
+    )
+    if (gameNoError) {
+      setError(gameNoError)
+      return
+    }
+
     setError('')
     setSubmitting(true)
 
@@ -142,7 +162,14 @@ export function EditGamePage() {
         return { playerId, rank, point }
       })
 
-      await updateGameWithResults(gameId, { date, appName, memo, entries })
+      const gameNoChanged = parsedGameNo !== game.gameNo
+      await updateGameWithResults(gameId, {
+        date,
+        appName,
+        memo,
+        ...(gameNoChanged ? { gameNo: parsedGameNo } : {}),
+        entries,
+      })
       navigate(`/games/${gameId}`)
     } catch (e) {
       console.error(e)
@@ -174,6 +201,21 @@ export function EditGamePage() {
           <h2 className="text-white/60 text-xs font-semibold uppercase tracking-wider">
             基本情報
           </h2>
+
+          <div>
+            <label className="label">第〇戦（試合番号） *</label>
+            <input
+              type="number"
+              min={GAME_LIMITS.gameNoMin}
+              max={GAME_LIMITS.gameNoMax}
+              className="input font-mono"
+              value={gameNoInput}
+              onChange={(e) => setGameNoInput(e.target.value)}
+            />
+            <p className="text-white/40 text-xs mt-1">
+              この試合のシーズン内の番号です。同じシーズン内で他の試合と重複できません。シーズンが変わると第1戦から採番し直します。
+            </p>
+          </div>
 
           <div>
             <label className="label">開催日 *</label>

@@ -8,20 +8,46 @@ import {
 } from 'firebase/firestore'
 import { db, paths } from '../firebase'
 import {
+
   ALL_SEASONS_SCOPE,
+
   DEFAULT_SEASON_ID,
   FALLBACK_SEASONS,
   type SeasonScope,
 } from '../constants/seasons'
-import type { LeagueConfig, Season } from '../types'
+
+import type { GameSeasonMode, LeagueConfig, Season } from '../types'
+
 import { filterSeasonsForRanking } from '../utils/seasonRanking'
-import { resolveActiveSeasonId } from '../utils/seasonPeriod'
+
+import {
+
+  DEFAULT_GAME_SEASON_MODE,
+
+  normalizeGameSeasonMode,
+
+  resolveDisplayActiveSeason,
+
+  resolveGameSeasonId,
+
+} from '../utils/seasonPeriod'
+
+
 
 export function useSeasons() {
+
   const [seasons, setSeasons] = useState<Season[]>([])
   const [hasFirestoreSeasons, setHasFirestoreSeasons] = useState(false)
   const [seasonsLoading, setSeasonsLoading] = useState(true)
+
   const [configActiveSeasonId, setConfigActiveSeasonId] = useState(DEFAULT_SEASON_ID)
+
+  const [gameSeasonMode, setGameSeasonMode] = useState<GameSeasonMode>(
+
+    DEFAULT_GAME_SEASON_MODE,
+
+  )
+
   const [configLoading, setConfigLoading] = useState(true)
 
   useEffect(() => {
@@ -60,8 +86,14 @@ export function useSeasons() {
           if (data.activeSeasonId) {
             setConfigActiveSeasonId(data.activeSeasonId)
           }
+
+          setGameSeasonMode(normalizeGameSeasonMode(data.gameSeasonMode))
+
         } else {
           setConfigActiveSeasonId(DEFAULT_SEASON_ID)
+
+          setGameSeasonMode(DEFAULT_GAME_SEASON_MODE)
+
         }
         setConfigLoading(false)
       },
@@ -79,8 +111,35 @@ export function useSeasons() {
   }, [seasons])
 
   const activeSeasonId = useMemo(
-    () => resolveActiveSeasonId(displaySeasons, configActiveSeasonId),
-    [displaySeasons, configActiveSeasonId],
+
+    () =>
+
+      resolveGameSeasonId(
+
+        displaySeasons,
+
+        configActiveSeasonId,
+
+        gameSeasonMode,
+
+      ),
+
+    [displaySeasons, configActiveSeasonId, gameSeasonMode],
+
+  )
+
+
+
+  const gameSeasonFromPeriod = useMemo(
+
+    () =>
+
+      gameSeasonMode === 'period' &&
+
+      resolveDisplayActiveSeason(displaySeasons, configActiveSeasonId).fromPeriod,
+
+    [displaySeasons, configActiveSeasonId, gameSeasonMode],
+
   )
 
   const seasonsForRanking = useMemo(
@@ -95,8 +154,15 @@ export function useSeasons() {
     seasonsLoading: seasonsLoading || configLoading,
     activeSeasonId,
     configActiveSeasonId,
+
+    gameSeasonMode,
+
+    gameSeasonFromPeriod,
+
   }
 }
 
 export type { SeasonScope }
 export { ALL_SEASONS_SCOPE }
+
+

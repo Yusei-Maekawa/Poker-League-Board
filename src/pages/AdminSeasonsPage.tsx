@@ -32,8 +32,6 @@ import {
 
   getSeasonPeriodPhaseLabel,
 
-  resolveDisplayActiveSeason,
-
   seasonToPeriodFields,
 
   validateSeasonPeriodForSave,
@@ -52,7 +50,7 @@ import {
   usesCustomPointRules,
   validateSeasonPointRules,
 } from '../utils/seasonPointRules'
-import type { Season, SeasonPointRules } from '../types'
+import type { GameSeasonMode, Season, SeasonPointRules } from '../types'
 
 
 
@@ -82,9 +80,13 @@ export function AdminSeasonsPage() {
 
     seasonsLoading,
 
+    configActiveSeasonId,
+
     activeSeasonId,
 
-    configActiveSeasonId,
+    gameSeasonMode,
+
+    gameSeasonFromPeriod,
 
   } = useSeasons()
 
@@ -102,6 +104,14 @@ export function AdminSeasonsPage() {
 
     updateSeasonPointRules,
 
+    setActiveSeasonForGames,
+
+    setGameSeasonMode,
+
+    repairGameCountersOnlyFromGames,
+
+    repairGameActivitiesFromGames,
+
   } = useAppContext()
 
 
@@ -112,12 +122,37 @@ export function AdminSeasonsPage() {
 
   const [message, setMessage] = useState('')
 
+  const [repairCountersOpen, setRepairCountersOpen] = useState(false)
+  const [repairActivitiesOpen, setRepairActivitiesOpen] = useState(false)
+
   const [newPeriod, setNewPeriod] = useState<SeasonPeriodFields>(emptyPeriod)
   const [newLabel, setNewLabel] = useState('')
 
   const [editingId, setEditingId] = useState<string | null>(null)
 
   const [editPeriod, setEditPeriod] = useState<SeasonPeriodFields>(emptyPeriod)
+
+  const [gameSeasonPick, setGameSeasonPick] = useState(configActiveSeasonId)
+  const [gameSeasonModePick, setGameSeasonModePick] =
+    useState<GameSeasonMode>(gameSeasonMode)
+
+  useEffect(() => {
+    setGameSeasonPick(configActiveSeasonId)
+  }, [configActiveSeasonId])
+
+  useEffect(() => {
+    setGameSeasonModePick(gameSeasonMode)
+  }, [gameSeasonMode])
+
+  const effectiveGameSeasonLabel =
+    seasons.find((s) => s.id === activeSeasonId)?.label ?? activeSeasonId
+
+  const gameSeasonSubtitleSuffix =
+    gameSeasonMode === 'period'
+      ? gameSeasonFromPeriod
+        ? '（期間から自動）'
+        : '（手動設定・期間外）'
+      : '（手動）'
 
 
 
@@ -128,22 +163,6 @@ export function AdminSeasonsPage() {
   useEffect(() => {
     setNewLabel(nextPlanned.label)
   }, [nextPlanned.id, nextPlanned.label])
-
-  const displayActive = useMemo(
-
-    () => resolveDisplayActiveSeason(seasons, configActiveSeasonId),
-
-    [seasons, configActiveSeasonId],
-
-  )
-
-
-
-  const activeLabel =
-
-    seasons.find((s) => s.id === activeSeasonId)?.label ?? activeSeasonId
-
-
 
   if (authLoading || seasonsLoading) {
 
@@ -365,11 +384,7 @@ export function AdminSeasonsPage() {
 
         title="シーズン管理"
 
-        subtitle={`いまの試合採番: ${activeLabel}${
-
-          displayActive.fromPeriod ? '（期間から自動）' : ''
-
-        }`}
+        subtitle={`いまの試合採番: ${effectiveGameSeasonLabel}${gameSeasonSubtitleSuffix}`}
 
       />
 
@@ -379,7 +394,7 @@ export function AdminSeasonsPage() {
 
         各シーズンに <strong className="text-white/70">開始・終了の日時</strong>
 
-        を設定します（未設定も可。期間が重なるシーズンは保存できません）。いまの日時が期間内にあるシーズンに新規試合が紐づきます。第〇戦の番号はリーグ通しのままです。
+        を設定します（未設定も可。期間が重なるシーズンは保存できません）。試合採番は「手動」または「期間自動」モードで切り替えられます。第〇戦はシーズン内で自動採番します。
 
       </p>
 
@@ -427,6 +442,231 @@ export function AdminSeasonsPage() {
       )}
 
 
+
+      {!needsBootstrap && (
+        <div className="card px-4 py-4 mb-5 space-y-4 border-gold-500/25">
+          <h2 className="text-white/60 text-xs font-semibold uppercase tracking-wider">
+            試合採番
+          </h2>
+          <div>
+            <label htmlFor="game-season-mode" className="label">
+              採番モード
+            </label>
+            <select
+              id="game-season-mode"
+              className="input"
+              value={gameSeasonModePick}
+              disabled={submitting !== null}
+              onChange={(e) =>
+                setGameSeasonModePick(e.target.value as GameSeasonMode)
+              }
+            >
+              <option value="manual">手動（下で選んだシーズン）</option>
+              <option value="period">
+                期間自動（いまの日時が期間内のシーズン）
+              </option>
+            </select>
+            <p className="text-white/40 text-xs mt-1 leading-relaxed">
+              期間自動は不具合対応などに使えます。通常運用は手動を推奨します。
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn-secondary w-full text-sm"
+            disabled={
+              submitting !== null || gameSeasonModePick === gameSeasonMode
+            }
+            onClick={() =>
+              run('game-season-mode', async () => {
+                await setGameSeasonMode(gameSeasonModePick)
+                setMessage(
+                  gameSeasonModePick === 'period'
+                    ? '採番モードを「期間自動」に変更しました'
+                    : '採番モードを「手動」に変更しました',
+                )
+              })
+            }
+          >
+            {submitting === 'game-season-mode' ? '保存中...' : '採番モードを保存'}
+          </button>
+          <div>
+            <label htmlFor="game-season-pick" className="label">
+              {gameSeasonMode === 'period'
+                ? 'フォールバックシーズン（期間外のとき）'
+                : '採番先シーズン'}
+            </label>
+            <select
+              id="game-season-pick"
+              className="input"
+              value={gameSeasonPick}
+              disabled={submitting !== null}
+              onChange={(e) => setGameSeasonPick(e.target.value)}
+            >
+              {seasons.map((season) => (
+                <option key={season.id} value={season.id}>
+                  {season.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            type="button"
+            className="btn-primary w-full text-sm"
+            disabled={
+              submitting !== null || gameSeasonPick === configActiveSeasonId
+            }
+            onClick={() =>
+              run('game-season', async () => {
+                await setActiveSeasonForGames(gameSeasonPick)
+                const label =
+                  seasons.find((s) => s.id === gameSeasonPick)?.label ??
+                  gameSeasonPick
+                setMessage(`試合採番シーズンを「${label}」に設定しました`)
+              })
+            }
+          >
+            {submitting === 'game-season' ? '保存中...' : '試合採番シーズンを保存'}
+          </button>
+          <div className="pt-3 border-t border-white/[0.08] space-y-4">
+            <div className="space-y-2">
+              <p className="text-white/45 text-xs leading-relaxed">
+                旧形式の <span className="font-mono text-white/55">counters/games</span>{' '}
+                が残っている、または dev で番号がずれたときは再同期してください。
+              </p>
+
+              {!repairCountersOpen ? (
+                <button
+                  type="button"
+                  className="btn-secondary w-full text-sm"
+                  disabled={submitting !== null}
+                  onClick={() => {
+                    setRepairActivitiesOpen(false)
+                    setRepairCountersOpen(true)
+                  }}
+                >
+                  カウンターを試合データから再同期…
+                </button>
+              ) : (
+                <div className="space-y-3 rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-3">
+                  <p className="text-amber-100/90 text-xs leading-relaxed">
+                    各シーズンの{' '}
+                    <span className="font-mono">counters/seasonN</span>{' '}
+                    を試合データから作り直し、旧{' '}
+                    <span className="font-mono">counters/games</span>{' '}
+                    を削除します。アクティビティは触りません。本番データでは慎重に実行してください。
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="btn-primary flex-1 text-sm"
+                      disabled={submitting !== null}
+                      onClick={() =>
+                        run('repair-counters-only', async () => {
+                          const result = await repairGameCountersOnlyFromGames()
+                          const lines = Object.entries(result.nextBySeason)
+                            .sort(([a], [b]) => a.localeCompare(b))
+                            .map(([id, next]) => `${id}: 次は第${next}戦`)
+                          setMessage(
+                            [
+                              '試合番号カウンターを再同期しました。',
+                              ...lines,
+                              result.removedLegacyCounter
+                                ? '旧 counters/games を削除しました。'
+                                : '旧 counters/games はありませんでした。',
+                            ]
+                              .filter(Boolean)
+                              .join(' '),
+                          )
+                          setRepairCountersOpen(false)
+                        })
+                      }
+                    >
+                      {submitting === 'repair-counters-only'
+                        ? '再同期中...'
+                        : '再同期を実行'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary text-sm px-4"
+                      disabled={submitting === 'repair-counters-only'}
+                      onClick={() => setRepairCountersOpen(false)}
+                    >
+                      キャンセル
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2 border-t border-white/[0.08] pt-3">
+              <p className="text-white/45 text-xs leading-relaxed">
+                削除済み試合に紐づく{' '}
+                <span className="font-mono text-white/55">game_added</span>{' '}
+                の整理、または試合番号表示の修正が必要なときに使います。
+              </p>
+
+              {!repairActivitiesOpen ? (
+                <button
+                  type="button"
+                  className="btn-secondary w-full text-sm"
+                  disabled={submitting !== null}
+                  onClick={() => {
+                    setRepairCountersOpen(false)
+                    setRepairActivitiesOpen(true)
+                  }}
+                >
+                  孤立・ズレた game_added を整理…
+                </button>
+              ) : (
+                <div className="space-y-3 rounded-lg border border-red-500/35 bg-red-950/25 px-3 py-3">
+                  <p className="text-red-200/90 text-xs leading-relaxed">
+                    <span className="font-mono">activities</span> の{' '}
+                    <span className="font-mono">game_added</span>{' '}
+                    を削除・更新します。削除済み試合に紐づく game_added は削除され、残りは試合番号（gameNo）が試合データに同期されます。この操作は取り消せません。
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="flex-1 rounded-lg bg-red-600/80 hover:bg-red-600 px-4 py-2.5 text-white text-sm font-medium disabled:opacity-50 transition-colors"
+                      disabled={submitting !== null}
+                      onClick={() =>
+                        run('repair-activities', async () => {
+                          const result = await repairGameActivitiesFromGames()
+                          setMessage(
+                            [
+                              result.removedOrphanActivities > 0
+                                ? `試合削除済みの game_added を ${result.removedOrphanActivities} 件削除しました。`
+                                : '削除対象の game_added はありませんでした。',
+                              result.updatedActivityGameNos > 0
+                                ? `アクティビティの試合番号を ${result.updatedActivityGameNos} 件修正しました。`
+                                : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' '),
+                          )
+                          setRepairActivitiesOpen(false)
+                        })
+                      }
+                    >
+                      {submitting === 'repair-activities'
+                        ? '整理中...'
+                        : '整理を実行'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary text-sm px-4"
+                      disabled={submitting === 'repair-activities'}
+                      onClick={() => setRepairActivitiesOpen(false)}
+                    >
+                      キャンセル
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {!needsBootstrap && (
 
@@ -531,7 +771,7 @@ export function AdminSeasonsPage() {
 
             season={season}
 
-            isActiveForGames={season.id === activeSeasonId}
+            isGameSeason={season.id === activeSeasonId}
 
             isEditing={editingId === season.id}
 
@@ -786,7 +1026,7 @@ function SeasonAdminCard({
 
   season,
 
-  isActiveForGames,
+  isGameSeason,
 
   isEditing,
 
@@ -814,7 +1054,7 @@ function SeasonAdminCard({
 
   season: Season
 
-  isActiveForGames: boolean
+  isGameSeason: boolean
 
   isEditing: boolean
 
@@ -866,13 +1106,9 @@ function SeasonAdminCard({
   return (
 
     <div
-
       className={`card px-4 py-3 ${
-
-        isActiveForGames ? 'border-gold-500/35' : ''
-
+        isGameSeason ? 'border-gold-500/35' : ''
       }`}
-
     >
 
       <div className="flex flex-col gap-3">
@@ -882,16 +1118,11 @@ function SeasonAdminCard({
           <div className="min-w-0">
 
             <div className="flex flex-wrap items-center gap-2 mb-2">
-              {isActiveForGames && (
-
+              {isGameSeason && (
                 <span className="text-xs font-normal text-gold-400/90 bg-gold-500/15 px-2 py-0.5 rounded-full">
-
                   試合採番中
-
                 </span>
-
               )}
-
               <span className="text-xs font-normal text-white/45 bg-white/5 px-2 py-0.5 rounded-full">
                 {getSeasonPeriodPhaseLabel(phase)}
               </span>

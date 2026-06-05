@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom'
 import { ActivityListContent } from '../components/home/ActivityListContent'
 import { useActivities } from '../hooks/useActivities'
 import { useGames } from '../hooks/useGames'
+import { useSeasons } from '../hooks/useSeasons'
 import { countNewActivities } from '../utils/activityFeed'
 
 type ActivityHubContextValue = {
@@ -24,6 +25,7 @@ export function ActivityHubProvider({ children }: { children: ReactNode }) {
   const [listOpen, setListOpen] = useState(false)
   const { activities, loading } = useActivities()
   const { games } = useGames()
+  const { seasons } = useSeasons()
 
   const gamesExist = useCallback(
     (gameId: string) => games.some((g) => g.id === gameId),
@@ -92,6 +94,8 @@ export function ActivityHubProvider({ children }: { children: ReactNode }) {
                   <ActivityListContent
                     activities={visible}
                     gamesExist={gamesExist}
+                    seasons={seasons}
+                    games={games}
                     onNavigate={closeList}
                     compact
                   />

@@ -5,6 +5,7 @@ import {
 import type { Game, Result, RankingStat } from '../types'
 import { buildRankingStats } from './ranking'
 import { filterResultsBySeason } from './season'
+import { compareGamesByRecency, compareGamesChronologically } from './gameSort'
 
 export interface PlayerRecentGame {
   game: Game
@@ -58,11 +59,11 @@ export function getPlayerRecentGames(
   }
 
   return items
-    .sort((a, b) => b.game.gameNo - a.game.gameNo)
+    .sort((a, b) => compareGamesByRecency(a.game, b.game))
     .slice(0, limit)
 }
 
-/** 参加試合を gameNo 昇順に並べ、3位以内の連続本数を算出 */
+/** 参加試合を開催日時の古い順に並べ、3位以内の連続本数を算出 */
 export function computePodiumStreaks(
   playerId: string,
   games: Game[],
@@ -75,7 +76,7 @@ export function computePodiumStreaks(
     .filter((r) => r.playerId === playerId)
     .map((r) => ({ result: r, game: gameMap.get(r.gameId) }))
     .filter((x): x is { result: Result; game: Game } => !!x.game)
-    .sort((a, b) => a.game.gameNo - b.game.gameNo)
+    .sort((a, b) => compareGamesChronologically(a.game, b.game))
 
   let longest = 0
   let currentRun = 0

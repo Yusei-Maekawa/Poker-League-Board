@@ -51,8 +51,13 @@ export interface Season {
   updatedAt: Timestamp
 }
 
+/** 試合採番: manual=管理者が選んだシーズン / period=期間内を自動 */
+export type GameSeasonMode = 'manual' | 'period'
+
 export interface LeagueConfig {
   activeSeasonId: string
+  /** 未設定は manual */
+  gameSeasonMode?: GameSeasonMode
   updatedAt: Timestamp
 }
 
@@ -101,6 +106,10 @@ export interface Activity {
   gameNo?: number
   gameDate?: string
   gameTime?: string
+  /** game_added の採番シーズン（スナップショット） */
+  seasonId?: string
+  /** game_added の表示名スナップショット */
+  seasonLabel?: string
   actorUid?: string
 }
 
