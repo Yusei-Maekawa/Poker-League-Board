@@ -1,12 +1,23 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Layout, PageHeader } from '../components/Layout'
+import { StickyFeedback } from '../components/StickyFeedback'
 import { Loading } from '../components/Loading'
+import { SeasonScopeSection } from '../components/SeasonUserDisplay'
+import type { SeasonScope } from '../constants/seasons'
 import { useAdmins } from '../hooks/useAdmins'
+import { useGames } from '../hooks/useGames'
 import { usePlayers } from '../hooks/usePlayers'
 import { useResults } from '../hooks/useResults'
+import { useSeasons } from '../hooks/useSeasons'
 import { useAuth } from '../hooks/useAuth'
 import { buildRankingStats } from '../utils/ranking'
+import { filterResultsBySeason } from '../utils/season'
+import {
+  FormerMemberAvatar,
+  FormerMemberLabel,
+} from '../components/FormerMemberDisplay'
+import { isFormerMember, isPlayerAccountDeleted } from '../utils/playerAccount'
 import { getFirebaseErrorMessage } from '../utils/firebaseError'
 
 export function PlayersPage() {
@@ -19,11 +30,33 @@ export function PlayersPage() {
     removeAdmin,
   } = useAdmins(canManageAdmins)
   const { players, loading: playersLoading, banPlayer, unbanPlayer } = usePlayers()
+  const { games, loading: gamesLoading } = useGames()
   const { results, loading: resultsLoading } = useResults()
+  const { seasonsForRanking, activeSeasonId, seasonsLoading } = useSeasons()
+  const [scopeOverride, setScopeOverride] = useState<SeasonScope | null>(null)
+
+  const defaultScope = useMemo((): SeasonScope | null => {
+    if (seasonsForRanking.some((s) => s.id === activeSeasonId)) {
+      return activeSeasonId
+    }
+    if (seasonsForRanking.length > 0) return seasonsForRanking[0].id
+    return null
+  }, [activeSeasonId, seasonsForRanking])
+
+  const scope = scopeOverride ?? defaultScope
+
+  useEffect(() => {
+    if (scope && !seasonsForRanking.some((s) => s.id === scope)) {
+      setScopeOverride(
+        seasonsForRanking.length > 0 ? seasonsForRanking[0].id : null,
+      )
+    }
+  }, [scope, seasonsForRanking])
 
   const [adminForm, setAdminForm] = useState({ uid: '', note: '' })
   const [adminSubmitting, setAdminSubmitting] = useState(false)
   const [adminError, setAdminError] = useState('')
+  const [adminMessage, setAdminMessage] = useState('')
   const [removingAdminUid, setRemovingAdminUid] = useState('')
 
   const [playerBanSubmittingUid, setPlayerBanSubmittingUid] = useState('')
@@ -49,11 +82,15 @@ export function PlayersPage() {
 
     const { uid, unbanning } = banConfirm
     setPlayerBanError('')
+    setAdminMessage('')
     setPlayerBanSubmittingUid(uid)
     try {
       if (unbanning) await unbanPlayer(uid)
       else await banPlayer(uid)
       setBanConfirm(null)
+      setAdminMessage(
+        unbanning ? 'BAN を解除しました' : 'プレイヤーを BAN しました',
+      )
     } catch (e) {
       console.error(e)
       setPlayerBanError(
@@ -78,11 +115,13 @@ export function PlayersPage() {
     }
 
     setAdminError('')
+    setAdminMessage('')
     setAdminSubmitting(true)
 
     try {
       await addAdmin(uid, user.uid, adminForm.note)
       setAdminForm({ uid: '', note: '' })
+      setAdminMessage('管理者を追加しました')
     } catch (e) {
       console.error(e)
       setAdminError(
@@ -95,10 +134,12 @@ export function PlayersPage() {
 
   const handleRemoveAdmin = async (uid: string) => {
     setAdminError('')
+    setAdminMessage('')
     setRemovingAdminUid(uid)
 
     try {
       await removeAdmin(uid)
+      setAdminMessage('管理者を削除しました')
     } catch (e) {
       console.error(e)
       setAdminError(
@@ -110,36 +151,64 @@ export function PlayersPage() {
   }
 
   const activePlayers = players.filter((p) => p.isActive)
-  const rankingStats = buildRankingStats(players, results)
-  const totalPointMap = new Map(
-    rankingStats.map((stat) => [stat.player.id, stat.totalPoint]),
-  )
-  const loading = playersLoading || resultsLoading
 
-  const playCountMap = new Map<string, number>()
-  for (const r of results) {
-    playCountMap.set(r.playerId, (playCountMap.get(r.playerId) ?? 0) + 1)
-  }
+  const scopedResults = useMemo(() => {
+    if (!scope) return []
+    return filterResultsBySeason(games, results, scope)
+  }, [games, results, scope])
+
+  const rankingStats = useMemo(
+    () =>
+      buildRankingStats(players, scopedResults, {
+        participantsOnly: true,
+      }),
+    [players, scopedResults],
+  )
+
+  const totalPointMap = useMemo(
+    () => new Map(rankingStats.map((stat) => [stat.player.id, stat.totalPoint])),
+    [rankingStats],
+  )
+  const playCountMap = useMemo(
+    () => new Map(rankingStats.map((stat) => [stat.player.id, stat.playCount])),
+    [rankingStats],
+  )
+
+  const displayPlayers = useMemo(() => {
+    const order = new Map(rankingStats.map((s, i) => [s.player.id, i]))
+    return [...activePlayers]
+      .filter((p) => order.has(p.id))
+      .sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999))
+  }, [activePlayers, rankingStats])
+
+  const loading =
+    playersLoading || gamesLoading || resultsLoading || seasonsLoading
+
+  const scopeSubtitle = scope
+    ? `${displayPlayers.length}名（シーズン参加）`
+    : `${activePlayers.length}名`
 
   return (
     <Layout>
       <PageHeader
         title="プレイヤー"
-        subtitle={`${activePlayers.length}名`}
+        subtitle={scopeSubtitle}
         action={
-          user && hasPlayerProfile ? (
-            <Link to="/profile" className="btn-secondary text-sm">
-              マイプロフィール
-            </Link>
-          ) : user ? (
-            <Link to="/register" className="btn-primary text-sm">
-              登録する
-            </Link>
-          ) : (
-            <Link to="/register" className="btn-primary text-sm">
-              新規登録
-            </Link>
-          )
+          <div className="flex flex-col items-end gap-2">
+            {user && hasPlayerProfile ? (
+              <Link to="/profile" className="btn-secondary text-sm">
+                マイプロフィール
+              </Link>
+            ) : user ? (
+              <Link to="/register" className="btn-primary text-sm">
+                登録する
+              </Link>
+            ) : (
+              <Link to="/register" className="btn-primary text-sm">
+                新規登録
+              </Link>
+            )}
+          </div>
         }
       />
 
@@ -187,13 +256,6 @@ export function PlayersPage() {
                 }
               />
             </div>
-
-            {adminError && (
-              <p className="text-red-400 text-sm">{adminError}</p>
-            )}
-            {adminsError && (
-              <p className="text-red-400 text-sm">{adminsError}</p>
-            )}
 
             <button
               onClick={handleAddAdmin}
@@ -255,33 +317,44 @@ export function PlayersPage() {
             管理者だけがプレイヤーを無効化できます。無効化されたプレイヤーは新規参加・ランキングから外れます。
           </p>
 
-          {playerBanError && (
-            <p className="text-red-400 text-sm mb-3">{playerBanError}</p>
-          )}
-
           <div className="space-y-2">
             {players.map((player) => (
               <div
                 key={player.id}
                 className="bg-white/5 rounded-lg px-3 py-3 flex items-start gap-3"
               >
-                <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-lg font-bold flex-shrink-0">
-                  {player.icon || player.name.slice(0, 2)}
-                </div>
+                {isFormerMember(player) ? (
+                  <FormerMemberAvatar size="md" />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-lg font-bold flex-shrink-0">
+                    {player.icon || player.name.slice(0, 2)}
+                  </div>
+                )}
 
                 <div className="flex-1 min-w-0">
-                  <p className="text-white text-sm font-semibold truncate">
-                    {player.name}{' '}
-                    <span className="text-white/30 text-xs font-mono">
+                  <p className="text-white text-sm font-semibold truncate flex items-center gap-2 flex-wrap">
+                    {isFormerMember(player) ? (
+                      <FormerMemberLabel size="sm" />
+                    ) : (
+                      <span>{player.name}</span>
+                    )}
+                    <span className="text-white/30 text-xs font-mono font-normal">
                       ({player.id})
                     </span>
                   </p>
                   <p className="text-white/40 text-xs mt-1">
-                    状態: {player.isActive ? 'ACTIVE' : 'BAN'}
+                    状態:{' '}
+                    {isFormerMember(player)
+                      ? 'WITHDRAWN'
+                      : player.isActive
+                        ? 'ACTIVE'
+                        : 'BAN'}
                   </p>
                 </div>
 
-                {player.isActive ? (
+                {isPlayerAccountDeleted(player) ? (
+                  <span className="text-white/35 text-xs shrink-0">操作不可</span>
+                ) : player.isActive ? (
                   <button
                     type="button"
                     className="btn-secondary text-sm px-3 py-2"
@@ -310,15 +383,34 @@ export function PlayersPage() {
         </div>
       )}
 
+      {seasonsForRanking.length > 0 && scope ? (
+        <SeasonScopeSection
+          seasons={seasonsForRanking}
+          value={scope}
+          onChange={setScopeOverride}
+          className="mb-5"
+        />
+      ) : !seasonsLoading ? (
+        <p className="text-white/45 text-xs mb-5 leading-relaxed">
+          シーズン未設定のため、シーズン別の成績は表示できません。
+        </p>
+      ) : null}
+
       {loading ? (
         <Loading />
       ) : activePlayers.length === 0 ? (
         <div className="card py-12 text-center">
           <p className="text-white/30">まだプレイヤーがいません</p>
         </div>
+      ) : displayPlayers.length === 0 ? (
+        <div className="card py-12 text-center">
+          <p className="text-white/30 text-sm">
+            このシーズンに参加したプレイヤーはいません
+          </p>
+        </div>
       ) : (
         <div className="space-y-2 animate-slide-up">
-          {activePlayers.map((player) => {
+          {displayPlayers.map((player) => {
             const count = playCountMap.get(player.id) ?? 0
             const totalPoint = totalPointMap.get(player.id) ?? 0
             const pointLabel = totalPoint >= 0 ? `+${totalPoint}` : `${totalPoint}`
@@ -421,6 +513,18 @@ export function PlayersPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {(isAdmin || canManageAdmins) && (
+        <StickyFeedback
+          success={adminMessage}
+          error={playerBanError || adminError || adminsError}
+          onDismissSuccess={() => setAdminMessage('')}
+          onDismissError={() => {
+            setAdminError('')
+            setPlayerBanError('')
+          }}
+        />
       )}
     </Layout>
   )

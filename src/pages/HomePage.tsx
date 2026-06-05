@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { Layout } from '../components/Layout'
 import { RankingCard } from '../components/RankingCard'
@@ -7,30 +8,36 @@ import { usePlayers } from '../hooks/usePlayers'
 import { useGames } from '../hooks/useGames'
 import { useResults } from '../hooks/useResults'
 import { useAuth } from '../hooks/useAuth'
-import { useAnnouncements } from '../hooks/useAnnouncements'
-import { useActivities } from '../hooks/useActivities'
-import { AnnouncementsSection } from '../components/home/AnnouncementsSection'
-import { ActivityFeedSection } from '../components/home/ActivityFeedSection'
+import { useSeasons } from '../hooks/useSeasons'
+import { ActivityHomeNotice } from '../components/home/ActivityHomeNotice'
+import {
+  ActiveSeasonHero,
+  SeasonsScheduleCard,
+} from '../components/SeasonUserDisplay'
 import { APP_NAME } from '../constants/app'
 import { buildRankingStats } from '../utils/ranking'
+import { filterResultsBySeason, getSeasonLabelForGame } from '../utils/season'
 
 export function HomePage() {
   const { user, isAdmin, myPlayer } = useAuth()
   const { players, loading: playersLoading } = usePlayers()
   const { games, loading: gamesLoading } = useGames()
   const { results, loading: resultsLoading } = useResults()
-  const {
-    announcements,
-    loading: announcementsLoading,
-    error: announcementsError,
-  } = useAnnouncements()
-  const { activities, loading: activitiesLoading } = useActivities()
+  const { seasons, activeSeasonId, hasFirestoreSeasons } = useSeasons()
 
   const loading = playersLoading || gamesLoading || resultsLoading
-  const gameIdSet = new Set(games.map((g) => g.id))
+  const activeSeason = seasons.find((s) => s.id === activeSeasonId)
 
-  const stats = buildRankingStats(players, results)
-  const top3Stats = stats.slice(0, 3)
+  const top3Stats = useMemo(() => {
+    const scoped = filterResultsBySeason(games, results, activeSeasonId)
+    return buildRankingStats(players, scoped, {
+      participantsOnly: true,
+    }).slice(0, 3)
+  }, [players, games, results, activeSeasonId])
+
+  const rankingSectionTitle = activeSeason
+    ? `🏆 ${activeSeason.label}`
+    : '🏆 ランキング'
 
   // 直近3試合（gameNo降順）
   const recentGames = [...games]
@@ -46,9 +53,7 @@ export function HomePage() {
           <span className="text-white/80">t</span>
           <span className="sr-only">{APP_NAME}</span>
         </h1>
-        <p className="text-gold-400/80 text-sm mt-1 font-medium tracking-wider uppercase">
-          Season 1
-        </p>
+        <ActiveSeasonHero season={activeSeason} />
         <p className="text-white/55 text-sm lg:text-base mt-3 max-w-md lg:max-w-xl mx-auto leading-relaxed">
           ポーカーチェイスなどで友達と遊んだ試合結果を記録し、Discord内のランキングとして共有できるWebアプリです。
         </p>
@@ -86,17 +91,11 @@ export function HomePage() {
         )}
       </div>
 
-      <AnnouncementsSection
-        announcements={announcements}
-        loading={announcementsLoading}
-        fetchError={announcementsError}
-        showAdminLink={isAdmin}
-      />
-      <ActivityFeedSection
-        activities={activities}
-        loading={activitiesLoading}
-        gamesExist={(id) => gameIdSet.has(id)}
-      />
+      <ActivityHomeNotice />
+
+      {hasFirestoreSeasons && seasons.length > 0 && (
+        <SeasonsScheduleCard seasons={seasons} />
+      )}
 
       {loading ? (
         <Loading />
@@ -105,9 +104,19 @@ export function HomePage() {
           <div className="lg:grid lg:grid-cols-2 lg:gap-8 lg:items-start">
             {/* ランキング上位 */}
             <section className="mb-8 lg:mb-0">
-              <SectionHeader title="🏆 ランキング" link="/ranking" linkLabel="全て見る" />
+              <SectionHeader
+                title={rankingSectionTitle}
+                link="/ranking"
+                linkLabel="全て見る"
+              />
               {top3Stats.length === 0 ? (
-                <EmptyState text="まだデータがありません" />
+                <EmptyState
+                  text={
+                    activeSeason
+                      ? 'このシーズンにはまだデータがありません'
+                      : 'まだデータがありません'
+                  }
+                />
               ) : (
                 <div className="space-y-2">
                   {top3Stats.map((stat, i) => (
@@ -132,6 +141,7 @@ export function HomePage() {
                         game={game}
                         results={gameResults}
                         players={players}
+                        seasonLabel={getSeasonLabelForGame(game, seasons)}
                         compact
                       />
                     )
@@ -145,6 +155,20 @@ export function HomePage() {
           {isAdmin && (
             <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Link
+                to="/games/new"
+                className="btn-primary w-full flex items-center justify-center gap-2 text-base sm:col-span-2"
+              >
+                <span>＋</span>
+                <span>試合結果を追加</span>
+              </Link>
+              <Link
+                to="/admin/seasons"
+                className="btn-secondary w-full flex items-center justify-center gap-2 text-base"
+              >
+                <span>📅</span>
+                <span>シーズン管理</span>
+              </Link>
+              <Link
                 to="/admin/announcements"
                 className="btn-secondary w-full flex items-center justify-center gap-2 text-base"
               >
@@ -152,15 +176,8 @@ export function HomePage() {
                 <span>お知らせを投稿</span>
               </Link>
               <Link
-                to="/games/new"
-                className="btn-primary w-full flex items-center justify-center gap-2 text-base"
-              >
-                <span>＋</span>
-                <span>試合結果を追加</span>
-              </Link>
-              <Link
                 to="/players"
-                className="btn-secondary w-full flex items-center justify-center gap-2 text-base sm:col-span-2"
+                className="btn-secondary w-full flex items-center justify-center gap-2 text-base"
               >
                 <span>👤</span>
                 <span>プレイヤー管理</span>

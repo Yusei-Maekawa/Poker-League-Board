@@ -16,3 +16,8 @@ export const ANNOUNCEMENT_LIMITS = {
   title: 60,
   body: 2000,
 } as const
+
+/** シーズン表示名（ランキング切替・日程などに表示。ID は season1 形式のまま） */
+export const SEASON_LIMITS = {
+  label: 24,
+} as const

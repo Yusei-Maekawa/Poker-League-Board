@@ -1,4 +1,5 @@
 import { GAME_LIMITS } from './validationLimits'
+import { getLocalDateString } from './formatDateTime'
 
 const MAX_APP_NAME_LEN = GAME_LIMITS.appName
 const MAX_MEMO_LEN = GAME_LIMITS.memo
@@ -12,7 +13,7 @@ export function validateGameForm(
 ): string | null {
   if (!date) return '日付を入力してください'
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = getLocalDateString()
   if (date > today) return '未来の日付は入力できません'
 
   const trimmedAppName = appName.trim()

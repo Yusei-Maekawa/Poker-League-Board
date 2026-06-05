@@ -4,13 +4,16 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react'
 import {
   onAuthStateChanged,
+  reauthenticateWithPopup,
   signInWithPopup,
   signOut,
+  deleteUser,
   type User,
 } from 'firebase/auth'
 import {
@@ -18,6 +21,7 @@ import {
   addDoc,
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -31,10 +35,45 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore'
-import { auth, db, googleProvider, paths } from '../firebase'
-import type { Activity, Announcement, Game, Player, Result } from '../types'
+import { auth, db, googleProvider, LEAGUE_ID, paths } from '../firebase'
+import { DEFAULT_SEASON_ID } from '../constants/seasons'
+import {
+  normalizeSeasonLabel,
+  planNextSeason,
+  validateSeasonLabel,
+} from '../utils/seasonAdmin'
+import {
+  resolveActiveSeasonId,
+  resolveSeasonPeriodFromFields,
+  type SeasonPeriodFields,
+} from '../utils/seasonPeriod'
+import type {
+  Activity,
+  Announcement,
+  Game,
+  LeagueConfig,
+  Player,
+  Result,
+  Season,
+  SeasonPointRules,
+} from '../types'
+import { DEFAULT_SEASON_POINT_RULES } from '../constants/pointRules'
+import {
+  normalizeSeasonPointRules,
+  validateSeasonPointRules,
+} from '../utils/seasonPointRules'
 import { allocateGameNo } from '../utils/allocateGameNo'
+import {
+  normalizeAnnouncementCategory,
+  sortAnnouncements,
+} from '../utils/announcementCategory'
 import { isBootstrapAdminUid } from '../utils/admin'
+import { canBootstrapAdminWithdraw } from '../config/environment'
+import {
+  DELETED_PLAYER_ICON,
+  DELETED_PLAYER_NAME,
+  isPlayerAccountDeleted,
+} from '../utils/playerAccount'
 import { getDefaultGameTime } from '../utils/formatDateTime'
 import { sanitizeUserText } from '../utils/sanitizeUserText'
 import { ANNOUNCEMENT_LIMITS } from '../utils/validationLimits'
@@ -69,6 +108,7 @@ type AppContextValue = {
     uid: string,
     params: { name: string; icon: string; memo: string },
   ) => Promise<void>
+  deleteOwnAccount: (uid: string) => Promise<void>
   banPlayer: (uid: string) => Promise<void>
   unbanPlayer: (uid: string) => Promise<void>
 
@@ -110,13 +150,43 @@ type AppContextValue = {
   createAnnouncement: (params: {
     title: string
     body: string
+    category: Announcement['category']
     isPinned: boolean
   }) => Promise<void>
   updateAnnouncement: (
     id: string,
-    params: { title: string; body: string; isPinned: boolean },
+    params: {
+      title: string
+      body: string
+      category: Announcement['category']
+      isPinned: boolean
+    },
   ) => Promise<void>
   deleteAnnouncement: (id: string) => Promise<void>
+
+  /** お知らせID → 既読時刻(ms)。ログイン時のみ Firestore 同期 */
+  announcementReadAtMs: Record<string, number>
+  announcementReadsLoading: boolean
+  markAnnouncementRead: (announcementId: string) => Promise<void>
+
+  bootstrapLeagueSeasons: () => Promise<void>
+  createSeasonWithPeriod: (params: {
+    period: SeasonPeriodFields
+    label: string
+  }) => Promise<{ id: string; label: string }>
+  updateSeasonLabel: (seasonId: string, label: string) => Promise<void>
+  updateSeasonPeriod: (
+    seasonId: string,
+    period: SeasonPeriodFields,
+  ) => Promise<void>
+  updateSeasonShowInRanking: (
+    seasonId: string,
+    showInRanking: boolean,
+  ) => Promise<void>
+  updateSeasonPointRules: (
+    seasonId: string,
+    rules: Partial<SeasonPointRules>,
+  ) => Promise<void>
 
   activities: Activity[]
   activitiesLoading: boolean
@@ -149,9 +219,60 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [announcementsLoading, setAnnouncementsLoading] = useState(true)
   const [announcementsError, setAnnouncementsError] = useState<string | null>(null)
+  const [announcementReadAtMs, setAnnouncementReadAtMs] = useState<
+    Record<string, number>
+  >({})
+  const [announcementReadsLoading, setAnnouncementReadsLoading] = useState(false)
 
   const [activities, setActivities] = useState<Activity[]>([])
   const [activitiesLoading, setActivitiesLoading] = useState(true)
+
+  const [leagueSeasons, setLeagueSeasons] = useState<Season[]>([])
+  const configActiveSeasonIdRef = useRef(DEFAULT_SEASON_ID)
+  const activeSeasonIdRef = useRef(DEFAULT_SEASON_ID)
+
+  const syncActiveSeasonForNewGames = useCallback((seasons: Season[]) => {
+    activeSeasonIdRef.current = resolveActiveSeasonId(
+      seasons,
+      configActiveSeasonIdRef.current,
+    )
+  }, [])
+
+  useEffect(() => {
+    const configRef = doc(db, paths.leagueConfig)
+    const unsubscribe = onSnapshot(
+      configRef,
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as LeagueConfig
+          if (data.activeSeasonId) {
+            configActiveSeasonIdRef.current = data.activeSeasonId
+          }
+        } else {
+          configActiveSeasonIdRef.current = DEFAULT_SEASON_ID
+        }
+        syncActiveSeasonForNewGames(leagueSeasons)
+      },
+      (err) => console.error('league config:', err),
+    )
+    return unsubscribe
+  }, [leagueSeasons, syncActiveSeasonForNewGames])
+
+  useEffect(() => {
+    const q = query(collection(db, paths.seasons), orderBy('order', 'asc'))
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
+        const items = snap.docs.map(
+          (d) => ({ id: d.id, ...d.data() }) as Season,
+        )
+        setLeagueSeasons(items)
+        syncActiveSeasonForNewGames(items)
+      },
+      (err) => console.error('seasons:', err),
+    )
+    return unsubscribe
+  }, [syncActiveSeasonForNewGames])
 
   // --- Auth（スプラッシュ中から開始） ---
   useEffect(() => {
@@ -279,13 +400,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const items = snapshot.docs.map(
           (d) => ({ id: d.id, ...d.data() }) as Announcement,
         )
-        items.sort((a, b) => {
-          if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1
-          const aMs = a.createdAt?.toMillis?.() ?? 0
-          const bMs = b.createdAt?.toMillis?.() ?? 0
-          return bMs - aMs
-        })
-        setAnnouncements(items)
+        setAnnouncements(sortAnnouncements(items))
         setAnnouncementsError(null)
         setAnnouncementsLoading(false)
       },
@@ -297,6 +412,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
     )
     return unsubscribe
   }, [])
+
+  useEffect(() => {
+    const uid = user?.uid
+    if (!uid) {
+      setAnnouncementReadAtMs({})
+      setAnnouncementReadsLoading(false)
+      return
+    }
+    setAnnouncementReadsLoading(true)
+    const readsCol = collection(db, paths.players, uid, 'announcementReads')
+    const unsubscribe = onSnapshot(
+      readsCol,
+      (snapshot) => {
+        const next: Record<string, number> = {}
+        for (const d of snapshot.docs) {
+          const readAt = d.data().readAt
+          next[d.id] = readAt?.toMillis?.() ?? 0
+        }
+        setAnnouncementReadAtMs(next)
+        setAnnouncementReadsLoading(false)
+      },
+      (err) => {
+        console.error(err)
+        setAnnouncementReadsLoading(false)
+      },
+    )
+    return unsubscribe
+  }, [user?.uid])
 
   useEffect(() => {
     const q = query(
@@ -341,13 +484,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const existing = await getDoc(playerRef)
 
       if (existing.exists()) {
-        // 再登録・途中失敗後の再試行は update（setDoc だと createdAt 変更で Rules 拒否）
-        await updateDoc(playerRef, {
-          name,
-          icon,
-          memo,
-          updatedAt: serverTimestamp(),
-        })
+        const prev = existing.data()
+        if (prev.deletedAt != null) {
+          // 退会後の再登録
+          await updateDoc(playerRef, {
+            authUid: uid,
+            name,
+            icon,
+            memo,
+            isActive: true,
+            deletedAt: deleteField(),
+            updatedAt: serverTimestamp(),
+          })
+        } else {
+          await updateDoc(playerRef, {
+            name,
+            icon,
+            memo,
+            updatedAt: serverTimestamp(),
+          })
+        }
       } else {
         await setDoc(playerRef, {
           authUid: uid,
@@ -373,7 +529,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       })
       setPlayerLoading(false)
 
-      if (!existing.exists()) {
+      if (!existing.exists() || existing.data()?.deletedAt != null) {
         // アクティビティは失敗しても登録自体は成功させる（Rules 未デプロイ時など）
         try {
           await addDoc(collection(db, paths.activities), {
@@ -405,6 +561,54 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [],
   )
 
+  const deleteOwnAccount = useCallback(async (uid: string) => {
+    if (isBootstrapAdminUid(uid) && !canBootstrapAdminWithdraw()) {
+      throw new Error('初期管理者は退会できません。')
+    }
+
+    const playerRef = doc(db, paths.players, uid)
+    const playerSnap = await getDoc(playerRef)
+    if (!playerSnap.exists()) {
+      throw new Error(
+        `このリーグ（${LEAGUE_ID}）にプレイヤー登録がありません。VITE_LEAGUE_ID を変えた場合は /register から登録し直してください。`,
+      )
+    }
+
+    const prev = playerSnap.data()
+    const withdrawPatch: Record<string, unknown> = {
+      name: DELETED_PLAYER_NAME,
+      icon: DELETED_PLAYER_ICON,
+      memo: '',
+      isActive: false,
+      deletedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }
+    if (!prev.authUid) {
+      withdrawPatch.authUid = uid
+    }
+    await updateDoc(playerRef, withdrawPatch)
+
+    setMyPlayer(null)
+    setPlayerLoading(false)
+
+    try {
+      const adminRef = doc(db, paths.admins, uid)
+      const adminSnap = await getDoc(adminRef)
+      if (adminSnap.exists()) {
+        await deleteDoc(adminRef)
+      }
+    } catch (adminErr) {
+      console.error('admin doc remove on account delete:', adminErr)
+    }
+
+    const currentUser = auth.currentUser
+    if (!currentUser || currentUser.uid !== uid) {
+      throw new Error('ログイン状態を確認してください。')
+    }
+    await reauthenticateWithPopup(currentUser, googleProvider)
+    await deleteUser(currentUser)
+  }, [])
+
   const banPlayer = useCallback(async (uid: string) => {
     await updateDoc(doc(db, paths.players, uid), {
       isActive: false,
@@ -426,6 +630,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const time = getDefaultGameTime()
       const docRef = await addDoc(collection(db, paths.games), {
         gameNo,
+        seasonId: activeSeasonIdRef.current,
         date: params.date,
         time,
         appName,
@@ -454,6 +659,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const time = getDefaultGameTime()
       batch.set(gameRef, {
         gameNo,
+        seasonId: activeSeasonIdRef.current,
         date: params.date,
         time,
         appName,
@@ -564,10 +770,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   })
 
   const createAnnouncement = useCallback(
-    async (params: { title: string; body: string; isPinned: boolean }) => {
+    async (params: {
+      title: string
+      body: string
+      category: Announcement['category']
+      isPinned: boolean
+    }) => {
       const uid = auth.currentUser?.uid
       if (!uid) throw new Error('ログインが必要です')
       const { title, body } = sanitizeAnnouncement(params)
+      const category = normalizeAnnouncementCategory(params.category)
       if (!title) throw new Error('タイトルを入力してください')
       if (title.length > ANNOUNCEMENT_LIMITS.title) {
         throw new Error(`タイトルは${ANNOUNCEMENT_LIMITS.title}文字以内です`)
@@ -578,6 +790,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await addDoc(collection(db, paths.announcements), {
         title,
         body,
+        category,
         isPinned: params.isPinned,
         authorUid: uid,
         createdAt: serverTimestamp(),
@@ -590,9 +803,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateAnnouncement = useCallback(
     async (
       id: string,
-      params: { title: string; body: string; isPinned: boolean },
+      params: {
+        title: string
+        body: string
+        category: Announcement['category']
+        isPinned: boolean
+      },
     ) => {
       const { title, body } = sanitizeAnnouncement(params)
+      const category = normalizeAnnouncementCategory(params.category)
       if (!title) throw new Error('タイトルを入力してください')
       if (title.length > ANNOUNCEMENT_LIMITS.title) {
         throw new Error(`タイトルは${ANNOUNCEMENT_LIMITS.title}文字以内です`)
@@ -603,6 +822,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await updateDoc(doc(db, paths.announcements, id), {
         title,
         body,
+        category,
         isPinned: params.isPinned,
         updatedAt: serverTimestamp(),
       })
@@ -614,9 +834,227 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await deleteDoc(doc(db, paths.announcements, id))
   }, [])
 
+  const markAnnouncementRead = useCallback(
+    async (announcementId: string) => {
+      const uid = user?.uid
+      if (!uid) return
+      const readRef = doc(
+        db,
+        paths.players,
+        uid,
+        'announcementReads',
+        announcementId,
+      )
+      await setDoc(readRef, { readAt: serverTimestamp() }, { merge: true })
+    },
+    [user?.uid],
+  )
+
+  const bootstrapLeagueSeasons = useCallback(async () => {
+    const seasonRef = doc(db, paths.seasons, DEFAULT_SEASON_ID)
+    const configRef = doc(db, paths.leagueConfig)
+    const existing = await getDoc(seasonRef)
+    const batch = writeBatch(db)
+    const now = serverTimestamp()
+    if (!existing.exists()) {
+      batch.set(seasonRef, {
+        label: 'Season 1',
+        order: 1,
+        createdAt: now,
+        updatedAt: now,
+      })
+    }
+    batch.set(
+      configRef,
+      { activeSeasonId: DEFAULT_SEASON_ID, updatedAt: now },
+      { merge: true },
+    )
+    await batch.commit()
+    configActiveSeasonIdRef.current = DEFAULT_SEASON_ID
+    syncActiveSeasonForNewGames(
+      existing.exists()
+        ? leagueSeasons
+        : [
+            {
+              id: DEFAULT_SEASON_ID,
+              label: 'Season 1',
+              order: 1,
+              createdAt: Timestamp.now(),
+              updatedAt: Timestamp.now(),
+            },
+          ],
+    )
+  }, [leagueSeasons, syncActiveSeasonForNewGames])
+
+  const createSeasonWithPeriod = useCallback(
+    async (params: { period: SeasonPeriodFields; label: string }) => {
+      const labelErr = validateSeasonLabel(params.label)
+      if (labelErr) throw new Error(labelErr)
+      const label = normalizeSeasonLabel(params.label)
+      const snap = await getDocs(
+        query(collection(db, paths.seasons), orderBy('order', 'asc')),
+      )
+      const existing = snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      })) as Season[]
+      const resolved = resolveSeasonPeriodFromFields(
+        params.period,
+        existing,
+      )
+      if ('error' in resolved) {
+        throw new Error(resolved.error)
+      }
+      const planned = planNextSeason(existing)
+      const newRef = doc(db, paths.seasons, planned.id)
+      if ((await getDoc(newRef)).exists()) {
+        throw new Error(`${label} はすでに存在します`)
+      }
+      const now = serverTimestamp()
+      const batch = writeBatch(db)
+      const seasonData: Record<string, unknown> = {
+        label,
+        order: planned.order,
+        showInRanking: true,
+        createdAt: now,
+        updatedAt: now,
+      }
+      if (resolved.ok.kind === 'set') {
+        seasonData.startsAt = resolved.ok.startsAt
+        seasonData.endsAt = resolved.ok.endsAt
+      }
+      batch.set(newRef, seasonData)
+      batch.set(
+        doc(db, paths.leagueConfig),
+        { activeSeasonId: planned.id, updatedAt: now },
+        { merge: true },
+      )
+      await batch.commit()
+      configActiveSeasonIdRef.current = planned.id
+      const newSeason: Season = {
+        id: planned.id,
+        label,
+        order: planned.order,
+        showInRanking: true,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      }
+      if (resolved.ok.kind === 'set') {
+        newSeason.startsAt = resolved.ok.startsAt
+        newSeason.endsAt = resolved.ok.endsAt
+      }
+      syncActiveSeasonForNewGames([...existing, newSeason])
+      return { id: planned.id, label }
+    },
+    [syncActiveSeasonForNewGames],
+  )
+
+  const updateSeasonLabel = useCallback(async (seasonId: string, label: string) => {
+    const labelErr = validateSeasonLabel(label)
+    if (labelErr) throw new Error(labelErr)
+    const normalized = normalizeSeasonLabel(label)
+    const seasonRef = doc(db, paths.seasons, seasonId)
+    const snap = await getDoc(seasonRef)
+    if (!snap.exists()) {
+      throw new Error('シーズンが見つかりません')
+    }
+    await updateDoc(seasonRef, {
+      label: normalized,
+      updatedAt: serverTimestamp(),
+    })
+  }, [])
+
+  const updateSeasonPeriod = useCallback(
+    async (seasonId: string, period: SeasonPeriodFields) => {
+      const snap = await getDocs(
+        query(collection(db, paths.seasons), orderBy('order', 'asc')),
+      )
+      const existing = snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      })) as Season[]
+      const resolved = resolveSeasonPeriodFromFields(
+        period,
+        existing,
+        seasonId,
+      )
+      if ('error' in resolved) {
+        throw new Error(resolved.error)
+      }
+      const seasonRef = doc(db, paths.seasons, seasonId)
+      const seasonSnap = await getDoc(seasonRef)
+      if (!seasonSnap.exists()) {
+        throw new Error('シーズンが見つかりません')
+      }
+      if (resolved.ok.kind === 'unset') {
+        await updateDoc(seasonRef, {
+          startsAt: deleteField(),
+          endsAt: deleteField(),
+          updatedAt: serverTimestamp(),
+        })
+        return
+      }
+      await updateDoc(seasonRef, {
+        startsAt: resolved.ok.startsAt,
+        endsAt: resolved.ok.endsAt,
+        updatedAt: serverTimestamp(),
+      })
+    },
+    [],
+  )
+
+  const updateSeasonShowInRanking = useCallback(
+    async (seasonId: string, showInRanking: boolean) => {
+      const seasonRef = doc(db, paths.seasons, seasonId)
+      const snap = await getDoc(seasonRef)
+      if (!snap.exists()) {
+        throw new Error('シーズンが見つかりません')
+      }
+      await updateDoc(seasonRef, {
+        showInRanking,
+        updatedAt: serverTimestamp(),
+      })
+    },
+    [],
+  )
+
+  const updateSeasonPointRules = useCallback(
+    async (seasonId: string, rules: Partial<SeasonPointRules>) => {
+      const err = validateSeasonPointRules(rules)
+      if (err) throw new Error(err)
+      const normalized = normalizeSeasonPointRules(rules)
+      const d = DEFAULT_SEASON_POINT_RULES
+      const isDefault =
+        normalized.rank1 === d.rank1 &&
+        normalized.rank2 === d.rank2 &&
+        normalized.rank3 === d.rank3 &&
+        normalized.rank4 === d.rank4 &&
+        normalized.rank5Plus === d.rank5Plus &&
+        normalized.lastPlace === d.lastPlace
+      const seasonRef = doc(db, paths.seasons, seasonId)
+      const snap = await getDoc(seasonRef)
+      if (!snap.exists()) {
+        throw new Error('シーズンが見つかりません')
+      }
+      if (isDefault) {
+        await updateDoc(seasonRef, {
+          pointRules: deleteField(),
+          updatedAt: serverTimestamp(),
+        })
+        return
+      }
+      await updateDoc(seasonRef, {
+        pointRules: normalized,
+        updatedAt: serverTimestamp(),
+      })
+    },
+    [],
+  )
+
   const isBootstrapAdmin = isBootstrapAdminUid(user?.uid)
   const isAdmin = isBootstrapAdmin || isManagedAdmin
-  const hasPlayerProfile = !!myPlayer
+  const hasPlayerProfile =
+    !!myPlayer && !isPlayerAccountDeleted(myPlayer)
   // 管理者 doc の確認は画面全体をブロックしない（登録画面が Loading で固まるのを防ぐ）
   const authLoadingCombined =
     authLoading || (user ? playerLoading && !myPlayer : false)
@@ -628,7 +1066,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     !activitiesLoading
 
   const isPlayerParticipationSuspended =
-    !!user && !!myPlayer && !myPlayer.isActive && !isAdmin
+    !!user &&
+    !!myPlayer &&
+    !isPlayerAccountDeleted(myPlayer) &&
+    !myPlayer.isActive &&
+    !isAdmin
 
   const value = useMemo<AppContextValue>(
     () => ({
@@ -647,6 +1089,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       playersError,
       registerPlayer,
       updateOwnPlayer,
+      deleteOwnAccount,
       banPlayer,
       unbanPlayer,
       games,
@@ -666,6 +1109,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       createAnnouncement,
       updateAnnouncement,
       deleteAnnouncement,
+      announcementReadAtMs,
+      announcementReadsLoading,
+      markAnnouncementRead,
+      bootstrapLeagueSeasons,
+      createSeasonWithPeriod,
+      updateSeasonLabel,
+      updateSeasonPeriod,
+      updateSeasonShowInRanking,
+      updateSeasonPointRules,
       activities,
       activitiesLoading,
       homeDataReady,
@@ -685,6 +1137,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       playersError,
       registerPlayer,
       updateOwnPlayer,
+      deleteOwnAccount,
       banPlayer,
       unbanPlayer,
       games,
@@ -704,6 +1157,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       createAnnouncement,
       updateAnnouncement,
       deleteAnnouncement,
+      announcementReadAtMs,
+      announcementReadsLoading,
+      markAnnouncementRead,
+      bootstrapLeagueSeasons,
+      createSeasonWithPeriod,
+      updateSeasonLabel,
+      updateSeasonPeriod,
+      updateSeasonShowInRanking,
+      updateSeasonPointRules,
       activities,
       activitiesLoading,
       homeDataReady,

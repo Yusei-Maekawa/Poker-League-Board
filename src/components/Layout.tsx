@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { APP_NAME } from '../constants/app'
 import { APP_VERSION_LABEL } from '../constants/version'
+import { ActivityHubProvider } from '../context/ActivityHubContext'
 import { Header } from './Header'
 import { BannedParticipationBanner } from './BannedParticipationBanner'
 import { DevEnvironmentBanner } from './DevEnvironmentBanner'
@@ -14,15 +15,17 @@ export function Layout({ children }: LayoutProps) {
     <div className="min-h-dvh bg-felt-texture">
       <DevEnvironmentBanner />
       <BannedParticipationBanner />
-      <Header />
-      <main className="app-container py-6 lg:py-8 pb-[max(1.5rem,env(safe-area-inset-bottom))] animate-fade-in">
-        {children}
-        <footer className="mt-10 pt-4 border-t border-white/[0.06] text-center">
-          <p className="text-white/30 text-xs font-medium tracking-wide">
-            {APP_NAME} {APP_VERSION_LABEL}
-          </p>
-        </footer>
-      </main>
+      <ActivityHubProvider>
+        <Header />
+        <main className="app-container py-6 lg:py-8 pb-[max(1.5rem,env(safe-area-inset-bottom))] animate-fade-in">
+          {children}
+          <footer className="mt-10 pt-4 border-t border-white/[0.06] text-center">
+            <p className="text-white/30 text-xs font-medium tracking-wide">
+              {APP_NAME} {APP_VERSION_LABEL}
+            </p>
+          </footer>
+        </main>
+      </ActivityHubProvider>
     </div>
   )
 }

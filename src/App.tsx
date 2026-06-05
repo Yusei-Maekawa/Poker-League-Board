@@ -9,11 +9,13 @@ import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { RankingPage } from './pages/RankingPage'
+import { AllTimeRankingPage } from './pages/AllTimeRankingPage'
 import { GamesPage } from './pages/GamesPage'
 import { GameDetailPage } from './pages/GameDetailPage'
 import { PlayersPage } from './pages/PlayersPage'
 import { PlayerDetailPage } from './pages/PlayerDetailPage'
 import { AdminAnnouncementsPage } from './pages/AdminAnnouncementsPage'
+import { AdminSeasonsPage } from './pages/AdminSeasonsPage'
 import { NewGamePage } from './pages/NewGamePage'
 import { EditGamePage } from './pages/EditGamePage'
 
@@ -58,13 +60,16 @@ function AppShell() {
           <Route path="/" element={<HomePage />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/ranking" element={<RankingPage />} />
+          <Route path="/ranking/all-time" element={<AllTimeRankingPage />} />
           <Route path="/games" element={<GamesPage />} />
           <Route path="/games/new" element={<NewGamePage />} />
           <Route path="/games/:gameId/edit" element={<EditGamePage />} />
           <Route path="/games/:gameId" element={<GameDetailPage />} />
           <Route path="/players" element={<PlayersPage />} />
+          <Route path="/players/:playerId/all-time" element={<PlayerDetailPage />} />
           <Route path="/players/:playerId" element={<PlayerDetailPage />} />
           <Route path="/admin/announcements" element={<AdminAnnouncementsPage />} />
+          <Route path="/admin/seasons" element={<AdminSeasonsPage />} />
         </Routes>
       </AuthRedirect>
     </BrowserRouter>

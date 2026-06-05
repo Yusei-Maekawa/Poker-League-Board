@@ -1,5 +1,9 @@
 import { Link, useLocation } from 'react-router-dom'
 import { APP_NAME } from '../constants/app'
+import { ActivityHubIcon } from './home/ActivityHubIcon'
+import { AnnouncementsHub } from './home/AnnouncementsHub'
+import { useAnnouncementUnread } from '../hooks/useAnnouncementUnread'
+import { useAnnouncements } from '../hooks/useAnnouncements'
 import { useAuth } from '../hooks/useAuth'
 
 const NAV = [
@@ -11,6 +15,17 @@ const NAV = [
 
 export function Header() {
   const { user, myPlayer, hasPlayerProfile, isAdmin, logout } = useAuth()
+  const {
+    announcements,
+    loading: announcementsLoading,
+    error: announcementsError,
+  } = useAnnouncements()
+  const {
+    unreadCount,
+    isUnread,
+    markAnnouncementRead,
+    canTrackUnread,
+  } = useAnnouncementUnread()
   const { pathname } = useLocation()
 
   const hideNav = pathname === '/login' || pathname === '/register'
@@ -27,6 +42,21 @@ export function Header() {
 
           {user ? (
             <div className="flex items-center gap-2">
+              {!hideNav && (
+                <>
+                  <AnnouncementsHub
+                    variant="icon"
+                    announcements={announcements}
+                    loading={announcementsLoading}
+                    fetchError={announcementsError}
+                    showAdminLink={isAdmin}
+                    unreadCount={canTrackUnread ? unreadCount : 0}
+                    isUnread={canTrackUnread ? isUnread : undefined}
+                    onMarkRead={canTrackUnread ? markAnnouncementRead : undefined}
+                  />
+                  <ActivityHubIcon />
+                </>
+              )}
               {hasPlayerProfile && (
                 <Link
                   to="/profile"
@@ -70,6 +100,17 @@ export function Header() {
             </div>
           ) : (
             <div className="flex items-center gap-3 text-xs">
+              {!hideNav && (
+                <>
+                  <AnnouncementsHub
+                    variant="icon"
+                    announcements={announcements}
+                    loading={announcementsLoading}
+                    fetchError={announcementsError}
+                  />
+                  <ActivityHubIcon />
+                </>
+              )}
               <Link
                 to="/login"
                 className="text-white/50 hover:text-gold-400 transition-colors"

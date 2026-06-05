@@ -12,6 +12,7 @@ export function useAuth() {
     isPlayerParticipationSuspended,
     login,
     logout,
+    deleteOwnAccount,
   } = useAppContext()
 
   return {
@@ -25,5 +26,6 @@ export function useAuth() {
     isPlayerParticipationSuspended,
     login,
     logout,
+    deleteOwnAccount,
   }
 }
